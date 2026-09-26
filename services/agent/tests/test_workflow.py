@@ -196,3 +196,47 @@ def test_stack_trace_targets_source_not_test(tmp_path):
     assert match.path == "user_service.py"
     assert match.line == 2
     assert workspace.locate("test_user_service.py:4: TypeError") is None
+
+
+def test_ocr_spacing_recovers_explicit_known_source_frame(tmp_path):
+    project(tmp_path)
+    workspace = Workspace(str(tmp_path))
+    captured = (
+        "test_user_service. py:4: TypeError\n"
+        "user_service. py : 2: TypeError: NoneType is not subscriptable\n"
+    )
+    match = workspace.locate(captured)
+    assert match is not None
+    assert match.path == "user_service.py"
+    assert match.line == 2
+
+
+def test_ocr_match_stays_strict_for_unknown_or_unlined_files(tmp_path):
+    project(tmp_path)
+    workspace = Workspace(str(tmp_path))
+    assert workspace.locate("user_servlce. py:2: TypeError") is None
+    assert workspace.locate("misuser_service.py:2: TypeError") is None
+    assert workspace.locate("user_service.py: TypeError") is None
+    assert workspace.locate("user_service.\npy:2: TypeError") is None
+    assert workspace.locate("user_service.py:0: TypeError") is None
+    assert workspace.locate("user_service.py:3: TypeError") is None
+    assert workspace.locate("test_user_service. py:4: TypeError") is None
+
+
+def test_ocr_session_gets_grounded_high_confidence(tmp_path, client):
+    folder = project(tmp_path)
+    assert client.post("/api/workspace", json={"path": str(folder)}).status_code == 200
+    token = pair(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={
+            "error_text": "test_user_service. py:4: TypeError\nuser_service. py : 2: TypeError",
+            "source": "camera",
+        },
+    )
+    assert response.status_code == 202
+    analyzed = asyncio.run(wait_stage(client, token, "root_cause_found"))
+    assert analyzed["analysis"]["confidence"] == "high"
+    assert analyzed["analysis"]["location"] == {"path": "user_service.py", "line": 2}

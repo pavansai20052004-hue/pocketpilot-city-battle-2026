@@ -87,7 +87,7 @@ function Button({
   );
 }
 
-function BrandHeader({ connected, onDisconnect }: { connected: boolean; onDisconnect?: () => void }) {
+function BrandHeader({ connected, paired, onDisconnect }: { connected: boolean; paired: boolean; onDisconnect: () => void }) {
   return (
     <View style={styles.header}>
       <View style={styles.brandWrap}>
@@ -98,13 +98,13 @@ function BrandHeader({ connected, onDisconnect }: { connected: boolean; onDiscon
         </View>
       </View>
       <Pressable
-        accessibilityRole={connected ? 'button' : 'text'}
-        accessibilityLabel={connected ? 'Disconnect laptop' : 'Not connected'}
-        onPress={connected ? onDisconnect : undefined}
+        accessibilityRole={paired ? 'button' : 'text'}
+        accessibilityLabel={connected ? 'Disconnect laptop' : paired ? 'Pair with laptop again' : 'Not connected'}
+        onPress={paired ? onDisconnect : undefined}
         style={styles.connectionPill}
       >
         <View style={[styles.connectionDot, { backgroundColor: connected ? c.lime : c.dim }]} />
-        <Text style={styles.connectionText}>{connected ? 'LINKED' : 'OFFLINE'}</Text>
+        <Text style={styles.connectionText}>{connected ? 'LINKED' : paired ? 'PAIR AGAIN' : 'OFFLINE'}</Text>
       </Pressable>
     </View>
   );
@@ -283,7 +283,9 @@ export default function App() {
     } catch (error) {
       setConnected(false);
       const message = error instanceof Error ? error.message : 'Cannot reach laptop.';
-      setNetworkError(message);
+      setNetworkError(message.includes('Invalid or expired device token')
+        ? 'The laptop agent restarted. Tap PAIR AGAIN and enter a fresh code.'
+        : message);
     } finally {
       polling.current = false;
     }
@@ -355,10 +357,10 @@ export default function App() {
 
   return <View style={styles.screen}>
     <StatusBar style="light" />
-    <BrandHeader connected={Boolean(token && connected)} onDisconnect={() => { void disconnect(); }} />
+    <BrandHeader connected={Boolean(token && connected)} paired={Boolean(token)} onDisconnect={() => { void disconnect(); }} />
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={styles.flex} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        {visibleNotice && <View style={styles.notice}><Text style={styles.noticeHeading}>CONNECTION OR REQUEST ISSUE</Text><Text style={styles.noticeBody}>{visibleNotice}</Text>{token && <Pressable accessibilityRole="button" onPress={() => { setNotice(null); void refresh(); }}><Text style={styles.noticeRetry}>TRY AGAIN  ↗</Text></Pressable>}</View>}
+        {visibleNotice && <View style={styles.notice}><Text style={styles.noticeHeading}>CONNECTION OR REQUEST ISSUE</Text><Text style={styles.noticeBody}>{visibleNotice}</Text>{token && <><Pressable accessibilityRole="button" onPress={() => { setNotice(null); void refresh(); }}><Text style={styles.noticeRetry}>TRY AGAIN  ↗</Text></Pressable><Pressable accessibilityRole="button" onPress={() => { void disconnect(); }}><Text style={styles.noticeRetry}>PAIR AGAIN  ↗</Text></Pressable></>}</View>}
         {!token ? <>
           <Eyebrow index="00">THE PHONE IS YOUR CONTROL SURFACE</Eyebrow>
           <Text style={styles.heroTitle}>Your next fix starts here<Text style={{ color: c.lime }}>.</Text></Text>

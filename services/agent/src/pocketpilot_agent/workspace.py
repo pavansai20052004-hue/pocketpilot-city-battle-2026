@@ -32,7 +32,12 @@ SKIP_PARTS = {
 MAX_SOURCE_BYTES = 80_000
 MAX_FILES = 600
 MAX_DEPTH = 12
-STACK_PATH = re.compile(r"([A-Za-z0-9_./\\-]+\.(?:py|java|ts|tsx|js|jsx))(?::(\d+))?")
+# OCR often inserts a space around the extension dot ("pricing. py:2").
+# Require an explicit line number and still resolve only against indexed files.
+STACK_PATH = re.compile(
+    r"(?<![A-Za-z0-9_./\\-])([A-Za-z0-9_./\\-]+?)[ \t]*\.[ \t]*(py|java|ts|tsx|js|jsx)[ \t]*:[ \t]*(\d+)\b",
+    re.IGNORECASE,
+)
 SENSITIVE_LINE = re.compile(r"(?i)(?:api[_-]?key|password|secret|access[_-]?token)\s*[:=]")
 
 
@@ -121,12 +126,12 @@ class Workspace:
     def locate(self, error_text: str) -> SourceMatch | None:
         candidates: list[tuple[str, int]] = []
         for match in STACK_PATH.finditer(error_text):
-            raw = match.group(1).replace("\\", "/")
+            raw = f"{match.group(1)}.{match.group(2).lower()}".replace("\\", "/")
             basename = raw.rsplit("/", 1)[-1]
-            line = int(match.group(2) or 1)
+            line = int(match.group(3))
             if line < 1:
                 continue
-            exact = [key for key in self.files if raw.endswith(key)]
+            exact = [key for key in self.files if raw == key or raw.endswith("/" + key)]
             hits = exact or [key for key in self.files if key.rsplit("/", 1)[-1] == basename]
             if len(hits) == 1 and not is_test_source(hits[0]):
                 candidates.append((hits[0], line))
@@ -140,7 +145,7 @@ class Workspace:
             source = raw_bytes.decode("utf-8")
         except UnicodeDecodeError:
             return None
-        if line > len(source.splitlines()) + 1:
+        if line > len(source.splitlines()):
             return None
         return SourceMatch(path, line, source, digest(raw_bytes))
 
