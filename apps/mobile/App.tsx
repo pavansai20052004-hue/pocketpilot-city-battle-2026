@@ -7,6 +7,7 @@ import {
   Animated,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -23,7 +24,7 @@ import { ErrorImageSource, extractErrorFromImage } from './vision';
 const URL_KEY = 'pocketpilot.citybattle.agent-url';
 const TOKEN_KEY = 'pocketpilot.citybattle.token';
 const ANDROID_SPEECH_SERVICE = 'com.google.android.as';
-type Tab = 'home' | 'debug' | 'sessions';
+type Tab = 'home' | 'debug' | 'sessions' | 'settings';
 
 const workingStages = new Set<Session['stage']>(['analyzing', 'generating_fix', 'testing']);
 
@@ -271,6 +272,54 @@ function HistoryPanel({ items, historyError }: { items: SessionHistoryItem[]; hi
   </>;
 }
 
+function SettingsPanel({
+  connected,
+  agentUrl,
+  state,
+  onForgetPairing,
+  onOpenDeviceSettings,
+}: {
+  connected: boolean;
+  agentUrl: string | null;
+  state: AgentState | null;
+  onForgetPairing: () => void;
+  onOpenDeviceSettings: () => void;
+}) {
+  return <>
+    <Eyebrow index="FIELD / 04">DEVICE & PRIVACY</Eyebrow>
+    <Text style={styles.pageTitle}>Settings.</Text>
+    <Text style={styles.pageSubtitle}>Check the laptop link and how PocketPilot handles your debugging data.</Text>
+    <Panel accent>
+      <Eyebrow index="01">LAPTOP AGENT</Eyebrow>
+      <View style={styles.metricRow}>
+        <Metric value={connected ? 'LINKED' : agentUrl ? 'OFFLINE' : 'NOT PAIRED'} label="CONNECTION" />
+        <Metric value={state?.provider?.ready ? 'READY' : 'UNAVAILABLE'} label="LOCAL MODEL" />
+      </View>
+      <Text style={styles.settingsLabel}>AGENT ADDRESS</Text>
+      <Text selectable style={styles.settingsValue}>{agentUrl || 'Pair from the welcome screen'}</Text>
+      <Text style={styles.settingsLabel}>ACTIVE PROJECT</Text>
+      <Text selectable style={styles.settingsValue}>{state?.workspace?.path || 'No project selected on the laptop'}</Text>
+      <Text style={styles.fieldHint}>The laptop agent inspects only the project folder selected from its dashboard.</Text>
+      {agentUrl && <>
+        <Text style={styles.fieldHint}>This clears the saved link on this phone. To revoke its laptop-side token, use REVOKE in the desktop dashboard.</Text>
+        <Button onPress={onForgetPairing} tone="danger" icon="↗">CLEAR SAVED PHONE LINK</Button>
+      </>}
+    </Panel>
+    <Panel>
+      <Eyebrow index="02">PRIVATE BY DEFAULT</Eyebrow>
+      <View style={styles.settingsRow}><Text style={styles.settingsRowTitle}>Image capture</Text><Text style={styles.settingsRowBody}>OCR runs on this phone. Images stay here; only reviewed text is sent when you analyze.</Text></View>
+      <View style={styles.settingsRow}><Text style={styles.settingsRowTitle}>Voice notes</Text><Text style={styles.settingsRowBody}>Speech is transcribed on this device. PocketPilot sends the transcript only after you choose Analyze.</Text></View>
+      <View style={styles.settingsRow}><Text style={styles.settingsRowTitle}>Code changes</Text><Text style={styles.settingsRowBody}>The laptop shows a bounded diff. No file changes until you approve it; undo checks that the file has not changed since.</Text></View>
+      <Text style={styles.fieldHint}>Session history stores short outcomes only—not raw error text, source code, diffs, or test output.</Text>
+    </Panel>
+    <Panel>
+      <Eyebrow index="03">DEVICE PERMISSIONS</Eyebrow>
+      <Text style={styles.body}>Camera access is used to capture an error screen. Microphone access is used only for on-device dictation; typing and screenshots remain available if either permission is off.</Text>
+      <View style={styles.sectionTop}><Button onPress={onOpenDeviceSettings} tone="secondary">OPEN ANDROID APP SETTINGS</Button></View>
+    </Panel>
+  </>;
+}
+
 export default function App() {
   const [address, setAddress] = useState('');
   const [code, setCode] = useState('');
@@ -368,6 +417,18 @@ export default function App() {
   async function disconnect() {
     await clearPairing();
     setToken(null); setAgentUrl(null); setState(null); setConnected(false); setTab('home'); setNotice(null); setNetworkError(null);
+  }
+
+  async function openDeviceSettings() {
+    if (Platform.OS === 'web') {
+      setNotice('Open Android Settings → Apps → PocketPilot AI → Permissions to review camera or microphone access.');
+      return;
+    }
+    try {
+      await Linking.openSettings();
+    } catch {
+      setNotice('Open Android Settings → Apps → PocketPilot AI → Permissions to review camera or microphone access.');
+    }
   }
 
   async function action(path: string, body: object, timeoutMs = 20000) {
@@ -517,7 +578,7 @@ export default function App() {
           <View style={styles.howRow}><Text style={styles.howNumber}>01</Text><View><Text style={styles.howTitle}>Capture the failure</Text><Text style={styles.howBody}>Paste the error on your phone.</Text></View></View>
           <View style={styles.howRow}><Text style={styles.howNumber}>02</Text><View><Text style={styles.howTitle}>Inspect the evidence</Text><Text style={styles.howBody}>Local AI explains the likely source.</Text></View></View>
           <View style={styles.howRow}><Text style={styles.howNumber}>03</Text><View><Text style={styles.howTitle}>Approve, test, undo</Text><Text style={styles.howBody}>You stay in control of every write.</Text></View></View>
-        </> : tab === 'sessions' ? <HistoryPanel items={state?.history ?? []} historyError={state?.history_error} /> : <>
+        </> : tab === 'sessions' ? <HistoryPanel items={state?.history ?? []} historyError={state?.history_error} /> : tab === 'settings' ? <SettingsPanel connected={connected} agentUrl={agentUrl} state={state} onForgetPairing={() => { void disconnect(); }} onOpenDeviceSettings={() => { void openDeviceSettings(); }} /> : <>
           <Eyebrow index="LIVE / 02">VISION DEBUGGER</Eyebrow>
           <Text style={styles.pageTitle}>{showComposer ? 'Show us the failure.' : session?.stage === 'verified' ? 'A fix, proven.' : session?.stage === 'undone' ? 'Back to the baseline.' : 'Follow the signal.'}</Text>
           <Text style={styles.pageSubtitle}>{showComposer ? 'Scan an error or paste a stack trace. Review the text before analysis.' : 'One bounded session. Every decision visible.'}</Text>
@@ -555,6 +616,7 @@ export default function App() {
       <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === 'home' }} onPress={() => setTab('home')} style={styles.tab}><Text style={[styles.tabIcon, tab === 'home' && styles.activeTab]}>⌂</Text><Text style={[styles.tabLabel, tab === 'home' && styles.activeTab]}>HOME</Text></Pressable>
       <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === 'debug' }} onPress={() => setTab('debug')} style={styles.tab}><Text style={[styles.tabIcon, tab === 'debug' && styles.activeTab]}>⌘</Text><Text style={[styles.tabLabel, tab === 'debug' && styles.activeTab]}>DEBUG</Text></Pressable>
       <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === 'sessions' }} onPress={() => setTab('sessions')} style={styles.tab}><Text style={[styles.tabIcon, tab === 'sessions' && styles.activeTab]}>≡</Text><Text style={[styles.tabLabel, tab === 'sessions' && styles.activeTab]}>SESSIONS</Text></Pressable>
+      <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === 'settings' }} onPress={() => setTab('settings')} style={styles.tab}><Text style={[styles.tabIcon, tab === 'settings' && styles.activeTab]}>⚙</Text><Text style={[styles.tabLabel, tab === 'settings' && styles.activeTab]}>SETTINGS</Text></Pressable>
     </View>}
   </View>;
 }
@@ -609,6 +671,11 @@ const styles = StyleSheet.create({
   howNumber: { color: c.lime, fontFamily: 'monospace', fontWeight: '700', fontSize: 13 },
   howTitle: { color: c.ink, fontSize: 16, fontWeight: '700' },
   howBody: { color: c.dim, fontSize: 12, marginTop: 5 },
+  settingsLabel: { color: c.dim, fontSize: 9, fontWeight: '800', letterSpacing: 1.4, marginTop: 17 },
+  settingsValue: { color: c.ink, fontSize: 13, lineHeight: 19, marginTop: 6 },
+  settingsRow: { borderTopWidth: 1, borderColor: c.line, paddingVertical: 15 },
+  settingsRowTitle: { color: c.ink, fontSize: 14, fontWeight: '700' },
+  settingsRowBody: { color: c.quiet, fontSize: 12, lineHeight: 19, marginTop: 6 },
   errorInput: { minHeight: 220, backgroundColor: c.canvas, color: c.ink, borderColor: c.line, borderWidth: 1, borderRadius: 14, padding: 15, fontFamily: 'monospace', fontSize: 13, lineHeight: 21, marginTop: 18 },
   captureRow: { flexDirection: 'row', gap: 10, marginTop: 18 },
   captureAction: { flex: 1, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: c.line, borderRadius: 12, backgroundColor: c.canvas },
