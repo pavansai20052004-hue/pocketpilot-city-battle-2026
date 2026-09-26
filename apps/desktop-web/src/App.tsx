@@ -6,6 +6,7 @@ const initialState: AgentState = {
   provider: { ready: false, model: "qwen3-coder:30b" },
   pairing: { connected_devices: 0 },
   session: null,
+  history: [],
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -40,6 +41,11 @@ function formatTime(value: number | null): string {
   if (!value) return "";
   const date = new Date(value * 1000);
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDateTime(value: number): string {
+  const date = new Date(value * 1000);
+  return Number.isNaN(date.getTime()) ? "" : `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function App() {
@@ -112,6 +118,7 @@ function App() {
   }
 
   const session = state.session;
+  const history = state.history ?? [];
   const busy = session?.stage === "analyzing" || session?.stage === "generating_fix" || session?.stage === "testing";
 
   return (
@@ -126,6 +133,7 @@ function App() {
           <a href="#workspace" className="nav-link"><span>⌘</span> Workspace</a>
           <a href="#connection" className="nav-link"><span>◎</span> Connection</a>
           <a href="#session" className="nav-link"><span>≡</span> Session</a>
+          <a href="#history" className="nav-link"><span>◷</span> History</a>
         </nav>
         <div className="sidebar-foot">
           <div className="privacy-dot" />
@@ -204,6 +212,19 @@ function App() {
             ) : (
               <div className="empty-session"><div className="empty-symbol">◌</div><div><h3>Waiting for a debug session</h3><p>Start on the iQOO. Analysis, approval, tests, and undo will appear here as they happen.</p></div></div>
             )}
+          </section>
+
+          <section id="history" className="panel session-panel history-panel">
+            <div className="panel-heading"><div><p className="eyebrow">04 / PRIVATE ARCHIVE</p><h2>Recent sessions</h2></div><span className="panel-symbol">◷</span></div>
+            <p className="panel-copy">Up to 25 completed outcomes saved on this laptop. Error logs, source code, diffs, and test output are excluded.</p>
+            {history.length ? <div className="history-list">{history.map(item => (
+              <article className="history-item" key={item.id}>
+                <div className="history-item-top"><span className={`history-stage ${item.stage}`}>{stateText(item.stage)}</span><time>{formatDateTime(item.updated_at)}</time></div>
+                <h3>{item.title}</h3>
+                <div className="history-item-meta"><span>{item.source.toUpperCase()} INPUT</span><span className="mono">{item.location ? `${item.location.path}:${item.location.line}` : "No source location"}</span><span>{item.check_passed === null ? "No check run" : item.check_passed ? "Check passed" : "Check failed"}</span></div>
+              </article>
+            ))}</div> : <div className="history-empty"><strong>No completed sessions yet.</strong><span>After a run finishes, its outcome will appear here.</span></div>}
+            {state.history_error && <p className="inline-error">{state.history_error}</p>}
           </section>
 
           <footer className="footer"><span>POCKETPILOT AI / CITY BATTLE 2026</span><span>SEE IT. SAY IT. FIX IT. <b>HUMAN IN CONTROL.</b></span></footer>

@@ -16,14 +16,14 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { AgentState, PairResult, Session, normalizeAgentAddress, request } from './api';
+import { AgentState, PairResult, Session, SessionHistoryItem, normalizeAgentAddress, request } from './api';
 import { palette as c } from './theme';
 import { ErrorImageSource, extractErrorFromImage } from './vision';
 
 const URL_KEY = 'pocketpilot.citybattle.agent-url';
 const TOKEN_KEY = 'pocketpilot.citybattle.token';
 const ANDROID_SPEECH_SERVICE = 'com.google.android.as';
-type Tab = 'home' | 'debug';
+type Tab = 'home' | 'debug' | 'sessions';
 
 const workingStages = new Set<Session['stage']>(['analyzing', 'generating_fix', 'testing']);
 
@@ -247,6 +247,30 @@ function ResultPanel({ session, onUndo, onNew, busy }: { session: Session; onUnd
   </Panel>;
 }
 
+function HistoryPanel({ items, historyError }: { items: SessionHistoryItem[]; historyError?: string | null }) {
+  return <>
+    <Eyebrow index="ARCHIVE / LOCAL">RECENT SESSIONS</Eyebrow>
+    <Text style={styles.pageTitle}>Your debug trail.</Text>
+    <Text style={styles.pageSubtitle}>A private record of outcomes from this laptop.</Text>
+    {items.length ? items.map(item => <Panel key={item.id}>
+      <View style={styles.splitRow}>
+        <Eyebrow index={item.stage === 'verified' ? '✓' : item.stage === 'undone' ? '↶' : '!'}>{item.stage.replaceAll('_', ' ').toUpperCase()}</Eyebrow>
+        <Label>{new Date(item.updated_at * 1000).toLocaleDateString()}</Label>
+      </View>
+      <Text style={styles.proposalTitle}>{item.title}</Text>
+      <Label>{item.source.toUpperCase()} INPUT</Label>
+      <Text style={styles.pathText}>{item.location ? `${item.location.path}:${item.location.line}` : 'Source location not established'}</Text>
+      <Text style={styles.fieldHint}>{item.check_passed === null ? 'No check completed' : `${item.check_passed ? 'CHECK PASSED' : 'CHECK FAILED'}${item.check_command ? ` · ${item.check_command}` : ''}`}</Text>
+    </Panel>) : <Panel accent>
+      <Eyebrow index="01">NO SAVED SESSIONS</Eyebrow>
+      <Text style={styles.proposalTitle}>Your next debug run starts the history.</Text>
+      <Text style={styles.body}>Completed outcomes will appear here automatically.</Text>
+    </Panel>}
+    {historyError && <Text style={styles.cautionText}>{historyError}</Text>}
+    <Text style={styles.fieldHint}>The laptop stores up to 25 summaries. Error logs, source code, diffs, and test output are not included.</Text>
+  </>;
+}
+
 export default function App() {
   const [address, setAddress] = useState('');
   const [code, setCode] = useState('');
@@ -351,7 +375,7 @@ export default function App() {
     setBusy(true); setNotice(null);
     try {
       const session = await request<Session>(agentUrl, path, token, body, timeoutMs);
-      setState(current => current ? { ...current, session } : { workspace: null, provider: null, session });
+      setState(current => current ? { ...current, session } : { workspace: null, provider: null, session, history: [] });
       setTab('debug'); setComposeNew(false);
       void refresh();
     } catch (error) { setNotice(error instanceof Error ? error.message : 'The action did not complete.'); }
@@ -493,7 +517,7 @@ export default function App() {
           <View style={styles.howRow}><Text style={styles.howNumber}>01</Text><View><Text style={styles.howTitle}>Capture the failure</Text><Text style={styles.howBody}>Paste the error on your phone.</Text></View></View>
           <View style={styles.howRow}><Text style={styles.howNumber}>02</Text><View><Text style={styles.howTitle}>Inspect the evidence</Text><Text style={styles.howBody}>Local AI explains the likely source.</Text></View></View>
           <View style={styles.howRow}><Text style={styles.howNumber}>03</Text><View><Text style={styles.howTitle}>Approve, test, undo</Text><Text style={styles.howBody}>You stay in control of every write.</Text></View></View>
-        </> : <>
+        </> : tab === 'sessions' ? <HistoryPanel items={state?.history ?? []} historyError={state?.history_error} /> : <>
           <Eyebrow index="LIVE / 02">VISION DEBUGGER</Eyebrow>
           <Text style={styles.pageTitle}>{showComposer ? 'Show us the failure.' : session?.stage === 'verified' ? 'A fix, proven.' : session?.stage === 'undone' ? 'Back to the baseline.' : 'Follow the signal.'}</Text>
           <Text style={styles.pageSubtitle}>{showComposer ? 'Scan an error or paste a stack trace. Review the text before analysis.' : 'One bounded session. Every decision visible.'}</Text>
@@ -530,6 +554,7 @@ export default function App() {
     {token && <View style={styles.tabBar}>
       <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === 'home' }} onPress={() => setTab('home')} style={styles.tab}><Text style={[styles.tabIcon, tab === 'home' && styles.activeTab]}>⌂</Text><Text style={[styles.tabLabel, tab === 'home' && styles.activeTab]}>HOME</Text></Pressable>
       <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === 'debug' }} onPress={() => setTab('debug')} style={styles.tab}><Text style={[styles.tabIcon, tab === 'debug' && styles.activeTab]}>⌘</Text><Text style={[styles.tabLabel, tab === 'debug' && styles.activeTab]}>DEBUG</Text></Pressable>
+      <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === 'sessions' }} onPress={() => setTab('sessions')} style={styles.tab}><Text style={[styles.tabIcon, tab === 'sessions' && styles.activeTab]}>≡</Text><Text style={[styles.tabLabel, tab === 'sessions' && styles.activeTab]}>SESSIONS</Text></Pressable>
     </View>}
   </View>;
 }

@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from .history import SessionHistoryStore
 from .models import (
     Analysis,
     ApprovalRequest,
@@ -36,6 +37,7 @@ class AgentState:
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
         self.recovery = RecoveryStore()
+        self.history = SessionHistoryStore()
         self.recovery_error: str | None = None
         self.workspace: Workspace | None = None
         self.session: Session | None = None
@@ -72,6 +74,8 @@ class AgentState:
             self.original_bytes,
             self.patched_sha,
         )
+        if self.session:
+            self.history.record(self.session)
 
     def reconcile_recovery(self) -> None:
         if self.session is None:
@@ -166,6 +170,8 @@ async def snapshot() -> dict:
         "provider": {"ready": await state.provider.ready(), "model": MODEL},
         "pairing": {"connected_devices": len(state.tokens)},
         "session": state.session.model_dump() if state.session else None,
+        "history": [item.model_dump() for item in state.history.items],
+        "history_error": state.history.last_error,
         "recovery_error": state.recovery_error,
     }
 

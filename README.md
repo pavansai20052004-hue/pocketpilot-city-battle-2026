@@ -11,6 +11,7 @@ This is a **new implementation written during the Hyderabad City Battle event wi
 - `services/agent` — local FastAPI authority for workspace, local Ollama, proposals, tests, and undo
 - `packages/shared-types` — frontend API contract
 - The Android app can capture errors with the camera or screenshot, or dictate notes using an installed offline speech model. Dictation is editable and is never submitted automatically.
+- The phone and dashboard show up to 25 recent session outcomes. The laptop stores only a small local summary; raw error logs, source code, proposed diffs, and test output are not added to history.
 
 The normal development path is `npm install`, then `npm run dev:desktop` and `npm run dev:mobile` in separate terminals. The agent has its own Python environment and startup command in `services/agent/README.md`.
 
@@ -28,4 +29,4 @@ The core loop was verified on the loaner iQOO on 26 September 2026 with Android 
 
 This proves the bounded Python demo path, not arbitrary-project repair. The participant additionally verified a gallery scan of the terminal error through high-confidence analysis, fix, verification, and undo. A live camera photo still needs a separate physical-phone check.
 
-After this phone run, the agent gained a local recovery record for its current session and approved edit, plus nearest-project test selection for Python, Maven, and narrowly allowlisted npm scripts. These additions passed automated tests, including a real Node test run, but have **not yet been retested on the loaner phone**. See the [agent documentation](services/agent/README.md) for boundaries.
+After this phone run, the agent gained a local recovery record for its current session and approved edit, plus nearest-project test selection for Python, Maven, and narrowly allowlisted npm scripts. The phone and desktop also surface a bounded local history of completed outcomes, without retaining raw logs or code. The recovery and nested-project additions have **not yet been retested on the loaner phone**. See the [agent documentation](services/agent/README.md) for boundaries.

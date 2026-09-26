@@ -45,11 +45,24 @@ export type Session = {
   error_message: string | null;
 };
 
+export type SessionHistoryItem = {
+  id: string;
+  stage: Session['stage'];
+  source: string;
+  title: string;
+  location: { path: string; line: number } | null;
+  check_passed: boolean | null;
+  check_command: string | null;
+  updated_at: number;
+};
+
 export type AgentState = {
   workspace: { path: string | null; ready: boolean; files: number } | null;
   provider: { ready: boolean; model: string } | null;
   pairing?: unknown;
   session: Session | null;
+  history: SessionHistoryItem[];
+  history_error?: string | null;
 };
 
 export type PairResult = { token: string; device_name: string };

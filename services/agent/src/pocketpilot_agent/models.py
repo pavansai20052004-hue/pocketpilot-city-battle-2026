@@ -65,6 +65,19 @@ class Session(BaseModel):
     error_message: str | None = None
 
 
+class SessionHistoryItem(BaseModel):
+    """Small local-only session summary; never includes logs, diffs, or source."""
+
+    id: str
+    stage: Stage
+    source: str
+    title: str
+    location: Location | None = None
+    check_passed: bool | None = None
+    check_command: str | None = None
+    updated_at: int = Field(ge=0)
+
+
 class PairRequest(BaseModel):
     code: str = Field(min_length=6, max_length=12)
     device_name: str = Field(min_length=1, max_length=80)

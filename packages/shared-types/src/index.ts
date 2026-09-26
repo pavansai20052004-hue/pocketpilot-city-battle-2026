@@ -57,11 +57,24 @@ export interface Session {
   error_message: string | null;
 }
 
+export interface SessionHistoryItem {
+  id: string;
+  stage: Stage;
+  source: string;
+  title: string;
+  location: SourceLocation | null;
+  check_passed: boolean | null;
+  check_command: string | null;
+  updated_at: number;
+}
+
 export interface AgentState {
   workspace: { path: string | null; ready: boolean; files: number };
   provider: { ready: boolean; model: string };
   pairing: { connected_devices: number };
   session: Session | null;
+  history: SessionHistoryItem[];
+  history_error?: string | null;
 }
 
 export interface Health {
