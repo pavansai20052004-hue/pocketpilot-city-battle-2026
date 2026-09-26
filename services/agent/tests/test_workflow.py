@@ -211,6 +211,28 @@ def test_ocr_spacing_recovers_explicit_known_source_frame(tmp_path):
     assert match.line == 2
 
 
+def test_ocr_python_traceback_recovers_spaced_path_and_accented_line(tmp_path):
+    folder = tmp_path / "demo" / "discount-case"
+    folder.mkdir(parents=True)
+    (folder / "pricing.py").write_text(
+        "def total_after_discount(amount, percent):\n"
+        "    return amount - (amount * percent // 100)\n"
+    )
+    workspace = Workspace(str(tmp_path))
+    captured_path = str(folder / "pricing.py").replace("/", "\\")
+    captured_path = captured_path.replace("\\pricing.py", " \\pricing. py")
+    captured = (
+        f'File "{captured_path}", líne 2, in total_after_discount\n'
+        "TypeError: unsupported operand type(s) for *: 'int' and 'NoneType'"
+    )
+
+    match = workspace.locate(captured)
+
+    assert match is not None
+    assert match.path == "demo/discount-case/pricing.py"
+    assert match.line == 2
+
+
 def test_ocr_match_stays_strict_for_unknown_or_unlined_files(tmp_path):
     project(tmp_path)
     workspace = Workspace(str(tmp_path))

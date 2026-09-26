@@ -38,6 +38,13 @@ STACK_PATH = re.compile(
     r"(?<![A-Za-z0-9_./\\-])([A-Za-z0-9_./\\-]+?)[ \t]*\.[ \t]*(py|java|ts|tsx|js|jsx)[ \t]*:[ \t]*(\d+)\b",
     re.IGNORECASE,
 )
+# Python tracebacks put the line marker after the quoted filename. Camera OCR
+# may also confuse the `i` in "line" with an accented character.
+TRACEBACK_FRAME = re.compile(
+    r"\bFile\s+['\"]([^'\"]+?\.[ \t]*(?:py|java|ts|tsx|js|jsx))['\"]"
+    r"[^\r\n]{0,48}?\bl[ií]ne\s+(\d+)\b",
+    re.IGNORECASE,
+)
 SENSITIVE_LINE = re.compile(r"(?i)(?:api[_-]?key|password|secret|access[_-]?token)\s*[:=]")
 
 
@@ -125,29 +132,46 @@ class Workspace:
 
     def locate(self, error_text: str) -> SourceMatch | None:
         candidates: list[tuple[str, int]] = []
-        for match in STACK_PATH.finditer(error_text):
-            raw = f"{match.group(1)}.{match.group(2).lower()}".replace("\\", "/")
+
+        def add_candidate(raw_path: str, line_text: str) -> None:
+            # OCR may add spaces just before a path separator or extension dot.
+            # Trim path components, then trust only a unique indexed-file match.
+            raw = "/".join(part.strip() for part in raw_path.replace("\\", "/").split("/"))
+            raw = re.sub(
+                r"[ \t]*\.[ \t]*(py|java|ts|tsx|js|jsx)$",
+                lambda match: "." + match.group(1).lower(),
+                raw,
+                flags=re.IGNORECASE,
+            )
             basename = raw.rsplit("/", 1)[-1]
-            line = int(match.group(3))
+            line = int(line_text)
             if line < 1:
-                continue
+                return
             exact = [key for key in self.files if raw == key or raw.endswith("/" + key)]
             hits = exact or [key for key in self.files if key.rsplit("/", 1)[-1] == basename]
             if len(hits) == 1 and not is_test_source(hits[0]):
                 candidates.append((hits[0], line))
-        if not candidates:
-            return None
-        # Test code provides evidence, but never becomes the patch target.
-        path, line = candidates[0]
-        file_path = self.safe_file(path)
-        raw_bytes = file_path.read_bytes()
-        try:
-            source = raw_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
-        if line > len(source.splitlines()):
-            return None
-        return SourceMatch(path, line, source, digest(raw_bytes))
+
+        for match in STACK_PATH.finditer(error_text):
+            add_candidate(
+                f"{match.group(1)}.{match.group(2)}",
+                match.group(3),
+            )
+        for match in TRACEBACK_FRAME.finditer(error_text):
+            add_candidate(match.group(1), match.group(2))
+
+        # Test frames are useful evidence, but never become patch targets.
+        # Skip invalid line numbers and try the next grounded source frame.
+        for path, line in candidates:
+            file_path = self.safe_file(path)
+            raw_bytes = file_path.read_bytes()
+            try:
+                source = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            if line <= len(source.splitlines()):
+                return SourceMatch(path, line, source, digest(raw_bytes))
+        return None
 
     def context(self, match: SourceMatch) -> str:
         lines = match.text.splitlines()
