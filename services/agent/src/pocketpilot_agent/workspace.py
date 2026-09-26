@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .models import Location, Validation
 
-SOURCE_EXTENSIONS = {".py", ".java", ".ts", ".tsx", ".js", ".jsx"}
+SOURCE_EXTENSIONS = {".py", ".java", ".ts", ".tsx", ".js", ".jsx", ".cs"}
 SKIP_PARTS = {
     ".git",
     ".hg",
@@ -37,17 +37,38 @@ MAX_DEPTH = 12
 # OCR often inserts a space around the extension dot ("pricing. py:2").
 # Require an explicit line number and still resolve only against indexed files.
 STACK_PATH = re.compile(
-    r"(?<![A-Za-z0-9_./\\-])([A-Za-z0-9_./\\-]+?)[ \t]*\.[ \t]*(py|java|ts|tsx|js|jsx)[ \t]*:[ \t]*(\d+)\b",
+    r"(?<![A-Za-z0-9_./\\-])((?:[A-Za-z]:[\\/])?[A-Za-z0-9_./\\ -]+?)[ \t]*"
+    r"\.[ \t]*(py|java|ts|tsx|js|jsx|cs)[ \t]*:[ \t]*(\d+)\b",
+    re.IGNORECASE,
+)
+# JavaScript/TypeScript and .NET compilers commonly report file(line,column).
+PARENTHESIZED_LOCATION = re.compile(
+    r"(?<![A-Za-z0-9_./\\-])((?:[A-Za-z]:[\\/])?[A-Za-z0-9_./\\ -]+?)[ \t]*"
+    r"\.[ \t]*(py|java|ts|tsx|js|jsx|cs)[ \t]*\([ \t]*(\d+)"
+    r"(?:[ \t]*,[ \t]*\d+)?[ \t]*\)",
+    re.IGNORECASE,
+)
+# .NET stack frames use `in path/File.cs:line 42`, unlike Java/Python frames.
+CSHARP_FRAME = re.compile(
+    r"\bin\s+((?:[A-Za-z]:[\\/])?[^\r\n()]+?\.[ \t]*cs):[ \t]*line[ \t]+(\d+)\b",
     re.IGNORECASE,
 )
 # Python tracebacks put the line marker after the quoted filename. Camera OCR
 # may also confuse the `i` in "line" with an accented character.
 TRACEBACK_FRAME = re.compile(
-    r"\bFile\s+['\"]([^'\"]+?\.[ \t]*(?:py|java|ts|tsx|js|jsx))['\"]"
+    r"\bFile\s+['\"]([^'\"]+?\.[ \t]*(?:py|java|ts|tsx|js|jsx|cs))['\"]"
     r"[^\r\n]{0,48}?\bl[ií]ne\s+(\d+)\b",
     re.IGNORECASE,
 )
 SENSITIVE_LINE = re.compile(r"(?i)(?:api[_-]?key|password|secret|access[_-]?token)\s*[:=]")
+
+
+def _fixed_command_argv(command: str, *arguments: str) -> list[str]:
+    """Build a fixed argv, using cmd.exe only for Windows batch entry points."""
+    if os.name == "nt" and Path(command).suffix.lower() in {".bat", ".cmd"}:
+        command_line = subprocess.list2cmdline([command, *arguments])
+        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", command_line]
+    return [command, *arguments]
 
 
 def is_test_source(path: str) -> bool:
@@ -57,7 +78,21 @@ def is_test_source(path: str) -> bool:
         any(part in {"test", "tests", "__tests__"} for part in parts[:-1])
         or name.startswith("test_")
         or name.endswith(
-            ("_test.py", ".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx", "test.java")
+            (
+                "_test.py",
+                ".test.ts",
+                ".test.tsx",
+                ".test.js",
+                ".test.jsx",
+                ".spec.ts",
+                ".spec.tsx",
+                ".spec.js",
+                ".spec.jsx",
+                "test.java",
+                "tests.java",
+                "test.cs",
+                "tests.cs",
+            )
         )
     )
 
@@ -140,7 +175,7 @@ class Workspace:
             # Trim path components, then trust only a unique indexed-file match.
             raw = "/".join(part.strip() for part in raw_path.replace("\\", "/").split("/"))
             raw = re.sub(
-                r"[ \t]*\.[ \t]*(py|java|ts|tsx|js|jsx)$",
+                r"[ \t]*\.[ \t]*(py|java|ts|tsx|js|jsx|cs)$",
                 lambda match: "." + match.group(1).lower(),
                 raw,
                 flags=re.IGNORECASE,
@@ -149,8 +184,17 @@ class Workspace:
             line = int(line_text)
             if line < 1:
                 return
-            exact = [key for key in self.files if raw == key or raw.endswith("/" + key)]
-            hits = exact or [key for key in self.files if key.rsplit("/", 1)[-1] == basename]
+            folded_raw = raw.casefold()
+            exact = [
+                key
+                for key in self.files
+                if folded_raw == key.casefold() or folded_raw.endswith("/" + key.casefold())
+            ]
+            hits = exact or [
+                key
+                for key in self.files
+                if key.rsplit("/", 1)[-1].casefold() == basename.casefold()
+            ]
             if len(hits) == 1 and not is_test_source(hits[0]):
                 candidates.append((hits[0], line))
 
@@ -159,6 +203,10 @@ class Workspace:
                 f"{match.group(1)}.{match.group(2)}",
                 match.group(3),
             )
+        for match in PARENTHESIZED_LOCATION.finditer(error_text):
+            add_candidate(f"{match.group(1)}.{match.group(2)}", match.group(3))
+        for match in CSHARP_FRAME.finditer(error_text):
+            add_candidate(match.group(1), match.group(2))
         for match in TRACEBACK_FRAME.finditer(error_text):
             add_candidate(match.group(1), match.group(2))
 
@@ -198,7 +246,71 @@ class Workspace:
         directory = (self.root / relative).parent if source_path else self.root
         while directory == self.root or self.root in directory.parents:
             if (directory / "pom.xml").is_file() and not (directory / "pom.xml").is_symlink():
-                return [shutil.which("mvn") or "mvn", "-q", "test"], "mvn -q test", directory
+                return (
+                    _fixed_command_argv(shutil.which("mvn") or "mvn", "-q", "test"),
+                    "mvn -q test",
+                    directory,
+                )
+            gradle_files = (
+                "build.gradle",
+                "build.gradle.kts",
+                "settings.gradle",
+                "settings.gradle.kts",
+            )
+            if any(
+                (directory / name).is_file() and not (directory / name).is_symlink()
+                for name in gradle_files
+            ):
+                arguments = ("--no-daemon", "--console=plain", "test")
+                windows_wrapper = directory / "gradlew.bat"
+                unix_wrapper = directory / "gradlew"
+                if (
+                    os.name == "nt"
+                    and windows_wrapper.is_file()
+                    and not windows_wrapper.is_symlink()
+                ):
+                    return (
+                        _fixed_command_argv(windows_wrapper.name, *arguments),
+                        "gradlew.bat --no-daemon --console=plain test",
+                        directory,
+                    )
+                if os.name != "nt" and unix_wrapper.is_file() and os.access(unix_wrapper, os.X_OK):
+                    return (
+                        [str(unix_wrapper), *arguments],
+                        "./gradlew --no-daemon --console=plain test",
+                        directory,
+                    )
+                gradle = shutil.which("gradle")
+                if gradle:
+                    return (
+                        _fixed_command_argv(gradle, *arguments),
+                        "gradle --no-daemon --console=plain test",
+                        directory,
+                    )
+                return None
+            dotnet_projects = [
+                path
+                for pattern in ("*.sln", "*.slnx", "*.csproj")
+                for path in directory.glob(pattern)
+                if path.is_file() and not path.is_symlink()
+            ]
+            if dotnet_projects:
+                # Prefer a solution when present; otherwise only run a unique project.
+                solutions = [
+                    path for path in dotnet_projects if path.suffix.lower() in {".sln", ".slnx"}
+                ]
+                candidates = solutions or [
+                    path for path in dotnet_projects if path.suffix.lower() == ".csproj"
+                ]
+                dotnet = shutil.which("dotnet")
+                if dotnet and len(candidates) == 1:
+                    target = candidates[0]
+                    return (
+                        [dotnet, "test", str(target), "--nologo", "--verbosity", "quiet"],
+                        f"dotnet test {target.name}",
+                        directory,
+                    )
+                return None
             if any(
                 (directory / name).is_file() and not (directory / name).is_symlink()
                 for name in ("pytest.ini", "pyproject.toml")
@@ -227,7 +339,9 @@ class Workspace:
                         extra = ["--", "--run"] if command == "vitest" else []
                         display = "npm run test" + (" -- --run" if extra else "")
                         return (
-                            [shutil.which("npm") or "npm", "run", "test", *extra],
+                            _fixed_command_argv(
+                                shutil.which("npm") or "npm", "run", "test", *extra
+                            ),
                             display,
                             directory,
                         )
