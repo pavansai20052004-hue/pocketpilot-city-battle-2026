@@ -1,0 +1,20 @@
+{
+  "name": "pocketpilot-city-battle",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev:desktop": "npm run dev --workspace=@pocketpilot/desktop",
+    "dev:mobile": "npm run start --workspace=@pocketpilot/mobile",
+    "build:shared": "npm run build --workspace=@pocketpilot/shared",
+    "build:desktop": "npm run build:shared && npm run build --workspace=@pocketpilot/desktop",
+    "check": "npm run build:shared && npm run typecheck --workspace=@pocketpilot/mobile && npm run build --workspace=@pocketpilot/desktop"
+  },
+  "engines": {
+    "node": ">=24",
+    "npm": ">=11"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "PocketPilot AI",
+    "slug": "pocketpilot-citybattle",
+    "scheme": "pocketpilot",
+    "version": "1.0.0",
+    "icon": "./assets/icon.png",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "android": {
+      "package": "ai.pocketpilot.citybattle",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#080B0A"
+      }
+    },
+    "web": {
+      "name": "PocketPilot AI",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "buildMode": "City Battle 2026",
+      "eas": {
+        "projectId": "f4236ba8-30c4-4a23-a69c-b45b7b2dda3a"
+      }
+    },
+    "owner": "zeroday-404"
+  }
+}

@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.expo/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+*.db
+.env
+.env.*
+!.env.example
+*.log
+*.egg-info/
+*.tsbuildinfo
+coverage/
