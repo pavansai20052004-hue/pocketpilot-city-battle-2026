@@ -12,7 +12,7 @@ python -m venv .venv
 .\.venv\Scripts\python -m uvicorn pocketpilot_agent.main:app --host 0.0.0.0 --port 8000
 ```
 
-The dashboard should call `http://127.0.0.1:8000`. The phone uses the laptop's current LAN address and port `8000`; both devices must be on a network that allows a direct connection. Only the dashboard's loopback requests can choose a workspace or issue a pairing code. Phone requests use the one-time code to obtain a Bearer token. Tokens are in memory and expire when the agent restarts.
+The dashboard should call `http://127.0.0.1:8000`. The phone uses the laptop's current LAN address and port `8000`; both devices must be on a network that allows a direct connection. Only the dashboard's loopback requests can choose a workspace or issue a pairing code. Phone requests use the one-time code to obtain a Bearer token. Tokens are in memory and expire when the agent restarts; re-pair the phone with a new code afterward.
 
 Run checks with:
 
@@ -39,6 +39,6 @@ Run checks with:
 - Only one active session and one selected source file are supported in this MVP. Ambiguous locations may be analyzed but cannot be patched.
 - The selected project must contain supported source files. Symlinks, hidden/dependency/build trees, credential-like filenames, and oversized source files are excluded.
 - The model only suggests an exact replacement in the matched file. The agent validates it before showing a diff. No model text becomes a shell command.
-- Automatic verification currently recognizes Maven (`mvn -q test`) or Python projects with `pyproject.toml`/`pytest.ini` (`python -m pytest -q`). Other project types require adding a reviewed fixed command before they can be called verified. Project tests themselves are code and should be trusted only for projects the user intentionally selected.
-- State is currently in-memory, so restart requires re-pairing and loses session history. Existing source changes are not reverted on restart; inspect the project before continuing.
+- Automatic verification selects the nearest project manifest above the changed source file. It recognizes Maven (`mvn -q test`), Python projects with `pyproject.toml`/`pytest.ini` (`python -m pytest -q`), and narrowly allowlisted npm test scripts (`vitest`, `vitest run`, `jest`, `jest --runInBand`, `react-scripts test`, or `node --test`). Unsupported scripts remain unverified. Project tests themselves execute project code, so select only folders you trust.
+- The current session and pre-edit snapshot are atomically saved outside the project in the user's local app-data directory. If the agent restarts after a fix, re-pair the phone; the verified or failed session can still be undone if the file has not changed again. In-flight analysis/generation/verification is interrupted, never silently resumed. The recovery record contains captured error text and source snapshots; keep this local file private. The app still retains only one session, not a browseable history.
 - Office Kit is used by the participant to operate the laptop remotely. This agent does not claim a vendor Office Kit API integration.

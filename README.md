@@ -26,4 +26,6 @@ Voice notes use Android on-device recognition only. If the English offline speec
 
 The core loop was verified on the loaner iQOO on 26 September 2026 with Android build 1.0.4. The phone paired to the laptop agent, the submitted error resolved to `pricing.py:2` with high confidence, and the model proposed a one-file change. After phone approval, the agent ran `python -m pytest -q` and reported **2 passed**. Undo then restored the original `pricing.py`; the agent's final session stage was `undone`. The participant also confirmed that microphone input was available in the corrected Android build.
 
-This proves the bounded Python demo path, not arbitrary-project repair. Camera OCR recovery still needs another physical-phone check; automatic verification currently supports the Python and Maven project types described in the [agent documentation](services/agent/README.md).
+This proves the bounded Python demo path, not arbitrary-project repair. The participant additionally verified a gallery scan of the terminal error through high-confidence analysis, fix, verification, and undo. A live camera photo still needs a separate physical-phone check.
+
+After this phone run, the agent gained a local recovery record for its current session and approved edit, plus nearest-project test selection for Python, Maven, and narrowly allowlisted npm scripts. These additions passed automated tests, including a real Node test run, but have **not yet been retested on the loaner phone**. See the [agent documentation](services/agent/README.md) for boundaries.

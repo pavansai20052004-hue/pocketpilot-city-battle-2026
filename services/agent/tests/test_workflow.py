@@ -1,13 +1,15 @@
 """Focused contract and safety tests for the fresh event backend."""
 
 import asyncio
+import shutil
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from pocketpilot_agent import main as agent
-from pocketpilot_agent.workspace import Workspace
+from pocketpilot_agent.models import Proposal, ProposedFile, Session
+from pocketpilot_agent.workspace import Workspace, digest
 
 
 def project(tmp_path: Path) -> Path:
@@ -35,7 +37,8 @@ async def wait_stage(client: TestClient, token: str, target: str) -> dict:
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
+    monkeypatch.setenv("POCKETPILOT_RECOVERY_PATH", str(tmp_path / "recovery.json"))
     monkeypatch.setattr(agent, "state", agent.AgentState())
 
     async def ready():
@@ -73,7 +76,7 @@ def pair(client: TestClient) -> str:
     return response.json()["token"]
 
 
-def test_approval_verification_undo(tmp_path, client):
+def test_approval_verification_recovery_undo(tmp_path, client, monkeypatch):
     folder = project(tmp_path)
     original = (folder / "user_service.py").read_bytes()
     assert client.post("/api/workspace", json={"path": str(folder)}).status_code == 200
@@ -98,6 +101,7 @@ def test_approval_verification_undo(tmp_path, client):
     assert generating.status_code == 202
     proposed = asyncio.run(wait_stage(client, token, "awaiting_approval"))
     assert (folder / "user_service.py").read_bytes() == original
+
     wrong = client.post(
         f"/api/sessions/{session_id}/approve",
         headers=headers,
@@ -113,6 +117,14 @@ def test_approval_verification_undo(tmp_path, client):
     assert approved.json()["stage"] == "verified"
     assert approved.json()["validation"]["passed"] is True
     assert (folder / "user_service.py").read_bytes() != original
+    monkeypatch.setattr(agent, "state", agent.AgentState())
+    assert agent.state.recovery_error is None
+    assert agent.state.session is not None
+    assert agent.state.session.id == session_id
+    assert agent.state.session.stage == "verified"
+    assert client.get("/api/state", headers=headers).status_code == 401
+    token = pair(client)
+    headers = {"Authorization": f"Bearer {token}"}
     undone = client.post(
         f"/api/sessions/{session_id}/undo",
         headers=headers,
@@ -120,6 +132,87 @@ def test_approval_verification_undo(tmp_path, client):
     )
     assert undone.status_code == 200
     assert undone.json()["stage"] == "undone"
+    assert (folder / "user_service.py").read_bytes() == original
+
+
+def test_recovery_before_apply_and_after_undo(tmp_path, client):
+    folder = project(tmp_path)
+    assert client.post("/api/workspace", json={"path": str(folder)}).status_code == 200
+    current = agent.state
+    match = current.workspace.locate("user_service.py:2: TypeError")
+    assert match is not None
+    original = (folder / "user_service.py").read_bytes()
+    patched = original.replace(b'return user["name"]', b'return "Unknown"')
+    current.match = match
+    current.session = Session(
+        id="recovery-case",
+        revision=2,
+        stage="testing",
+        source="text",
+        error_text="user_service.py:2: TypeError",
+    )
+    current.original_bytes = original
+    current.proposed_bytes = patched
+    current.patched_sha = digest(patched)
+    current.persist()
+
+    before_apply = agent.AgentState()
+    assert before_apply.recovery_error is None
+    assert before_apply.session.stage == "analysis_failed"
+    assert before_apply.patched_sha is None
+    assert (folder / "user_service.py").read_bytes() == original
+
+    before_apply.session.stage = "verified"
+    before_apply.patched_sha = digest(patched)
+    before_apply.original_bytes = original
+    before_apply.proposed_bytes = patched
+    before_apply.persist()
+    after_undo = agent.AgentState()
+    assert after_undo.session.stage == "undone"
+    assert after_undo.patched_sha is None
+
+
+def test_failed_source_write_does_not_trap_active_session(tmp_path, client, monkeypatch):
+    folder = project(tmp_path)
+    assert client.post("/api/workspace", json={"path": str(folder)}).status_code == 200
+    current = agent.state
+    match = current.workspace.locate("user_service.py:2: TypeError")
+    assert match is not None
+    original = (folder / "user_service.py").read_bytes()
+    current.match = match
+    current.proposed_bytes = original.replace(b'return user["name"]', b'return "Unknown"')
+    proposal = Proposal(
+        id="proposal",
+        title="Fix",
+        summary="Fix",
+        risk="medium",
+        files=[ProposedFile(path="user_service.py", diff="reviewed diff")],
+        why="Cause",
+        expected_effect="Test passes",
+    )
+    current.session = Session(
+        id="failed-write",
+        revision=2,
+        stage="awaiting_approval",
+        source="text",
+        error_text="user_service.py:2: TypeError",
+        proposal=proposal,
+    )
+    current.persist()
+    token = pair(client)
+
+    def fail_write(*_args):
+        raise OSError("disk write failed")
+
+    monkeypatch.setattr(agent, "atomic_write", fail_write)
+    response = client.post(
+        "/api/sessions/failed-write/approve",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"proposal_id": "proposal", "revision": 2},
+    )
+    assert response.status_code == 200
+    assert response.json()["stage"] == "failed"
+    assert current.patched_sha is None
     assert (folder / "user_service.py").read_bytes() == original
 
 
@@ -262,3 +355,38 @@ def test_ocr_session_gets_grounded_high_confidence(tmp_path, client):
     analyzed = asyncio.run(wait_stage(client, token, "root_cause_found"))
     assert analyzed["analysis"]["confidence"] == "high"
     assert analyzed["analysis"]["location"] == {"path": "user_service.py", "line": 2}
+
+
+def test_nested_react_project_selects_its_own_allowlisted_tests(tmp_path):
+    nested = tmp_path / "apps" / "web"
+    nested.mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='root'\nversion='0.1'\n")
+    (nested / "package.json").write_text('{"scripts":{"test":"vitest run"}}')
+    (nested / "App.tsx").write_text("export const App = () => null;\n")
+    workspace = Workspace(str(tmp_path))
+    selected = workspace.test_command("apps/web/App.tsx")
+    assert selected is not None
+    assert selected[1] == "npm run test"
+    assert selected[2] == nested
+
+
+def test_unsafe_package_test_script_is_not_executed(tmp_path):
+    (tmp_path / "package.json").write_text('{"scripts":{"test":"vitest run && echo unexpected"}}')
+    (tmp_path / "App.tsx").write_text("export const App = () => null;\n")
+    workspace = Workspace(str(tmp_path))
+    assert workspace.test_command("App.tsx") is None
+    assert workspace.verify("App.tsx").passed is False
+
+
+@pytest.mark.skipif(shutil.which("npm") is None, reason="npm is not installed")
+def test_node_project_runs_fixed_test_command(tmp_path):
+    (tmp_path / "package.json").write_text('{"scripts":{"test":"node --test"}}')
+    (tmp_path / "pricing.js").write_text("export const price = 100;\n")
+    (tmp_path / "pricing.test.js").write_text(
+        "const { test } = require('node:test');\n"
+        "test('price', () => { require('node:assert').strictEqual(100, 100); });\n"
+    )
+    workspace = Workspace(str(tmp_path))
+    validation = workspace.verify("pricing.js")
+    assert validation.passed is True, validation.output
+    assert validation.command == "npm run test"

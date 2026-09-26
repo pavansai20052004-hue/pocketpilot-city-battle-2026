@@ -24,6 +24,7 @@ from .models import (
     WorkspaceRequest,
 )
 from .provider import MODEL, OllamaProvider, ProviderError
+from .recovery import RecoveryStore
 from .workspace import SourceMatch, Workspace, digest
 
 
@@ -34,6 +35,8 @@ def text_field(value: object, fallback: str, limit: int = 1500) -> str:
 class AgentState:
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
+        self.recovery = RecoveryStore()
+        self.recovery_error: str | None = None
         self.workspace: Workspace | None = None
         self.session: Session | None = None
         self.match: SourceMatch | None = None
@@ -45,6 +48,65 @@ class AgentState:
         self.tokens: dict[str, str] = {}
         self.pair_attempts: dict[str, list[float]] = {}
         self.provider = OllamaProvider()
+        try:
+            (
+                self.workspace,
+                self.session,
+                self.match,
+                self.proposed_bytes,
+                self.original_bytes,
+                self.patched_sha,
+            ) = self.recovery.load()
+            self.reconcile_recovery()
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            self.recovery_error = f"Saved recovery state could not be loaded: {exc}"
+            self.workspace = None
+            self.reset_session()
+
+    def persist(self) -> None:
+        self.recovery.save(
+            self.workspace,
+            self.session,
+            self.match,
+            self.proposed_bytes,
+            self.original_bytes,
+            self.patched_sha,
+        )
+
+    def reconcile_recovery(self) -> None:
+        if self.session is None:
+            return
+        undo_safe = False
+        if self.patched_sha and self.workspace and self.match:
+            current_sha = digest(self.workspace.safe_file(self.match.path).read_bytes())
+            if current_sha == self.match.sha256:
+                # The journal was saved, but the process stopped before the edit.
+                self.patched_sha = None
+                self.original_bytes = None
+                if self.session.stage in {"verified", "failed"}:
+                    self.session.stage = "undone"
+                    self.session.error_message = None
+                    self.session.revision += 1
+                    self.persist()
+            elif current_sha != self.patched_sha:
+                self.session.error_message = (
+                    "Source changed after the applied fix. Automatic undo is blocked."
+                )
+            else:
+                undo_safe = True
+        if self.session.stage in {"analyzing", "generating_fix", "testing"}:
+            self.session.stage = "failed" if self.patched_sha else "analysis_failed"
+            self.session.error_message = "The laptop agent restarted during this step." + (
+                " The applied fix can still be undone."
+                if undo_safe
+                else (
+                    " Source changed; automatic undo is blocked."
+                    if self.patched_sha
+                    else " Start a new analysis."
+                )
+            )
+            self.session.revision += 1
+            self.persist()
 
     def reset_session(self) -> None:
         self.session = None
@@ -104,6 +166,7 @@ async def snapshot() -> dict:
         "provider": {"ready": await state.provider.ready(), "model": MODEL},
         "pairing": {"connected_devices": len(state.tokens)},
         "session": state.session.model_dump() if state.session else None,
+        "recovery_error": state.recovery_error,
     }
 
 
@@ -119,6 +182,8 @@ async def dashboard() -> dict:
 
 @app.post("/api/workspace", dependencies=[Depends(loopback_only)])
 async def select_workspace(body: WorkspaceRequest) -> dict:
+    if state.recovery_error:
+        raise HTTPException(409, state.recovery_error)
     try:
         workspace = Workspace(body.path)
     except (OSError, ValueError) as exc:
@@ -132,6 +197,7 @@ async def select_workspace(body: WorkspaceRequest) -> dict:
             raise HTTPException(409, "Undo or finish the current patch before changing workspace")
         state.workspace = workspace
         state.reset_session()
+        state.persist()
     return await snapshot()
 
 
@@ -202,6 +268,7 @@ async def analyze_in_background(
                 state.session.analysis = analysis
                 state.session.stage = "root_cause_found"
                 state.session.revision += 1
+                state.persist()
     except ProviderError:
         async with state.lock:
             if state.session and state.session.id == session_id:
@@ -210,10 +277,13 @@ async def analyze_in_background(
                     "Local AI is unavailable. Restore Ollama, then try again."
                 )
                 state.session.revision += 1
+                state.persist()
 
 
 @app.post("/api/sessions", status_code=202)
 async def create_session(body: NewSessionRequest, _device: str = Depends(paired_only)) -> Session:
+    if state.recovery_error:
+        raise HTTPException(409, state.recovery_error)
     async with state.lock:
         workspace = state.workspace
         if workspace is None:
@@ -231,6 +301,7 @@ async def create_session(body: NewSessionRequest, _device: str = Depends(paired_
             error_text=body.error_text,
         )
         state.session = created
+        state.persist()
         asyncio.create_task(analyze_in_background(created.id, workspace, match))
         return created.model_copy(deep=True)
 
@@ -295,6 +366,7 @@ async def propose_in_background(session_id: str, workspace: Workspace, match: So
                 state.session.proposal = proposal
                 state.session.stage = "awaiting_approval"
                 state.session.revision += 1
+                state.persist()
     except (ProviderError, ValueError, TypeError, SyntaxError):
         async with state.lock:
             if state.session and state.session.id == session_id:
@@ -303,6 +375,7 @@ async def propose_in_background(session_id: str, workspace: Workspace, match: So
                     "No safe patch was generated. Review the error text and try analysis again."
                 )
                 state.session.revision += 1
+                state.persist()
 
 
 @app.post("/api/sessions/{session_id}/proposal", status_code=202)
@@ -316,6 +389,7 @@ async def generate_proposal(session_id: str, _device: str = Depends(paired_only)
         current.stage = "generating_fix"
         current.revision += 1
         state.proposed_bytes = None
+        state.persist()
         asyncio.create_task(propose_in_background(session_id, state.workspace, state.match))
         return current.model_copy(deep=True)
 
@@ -353,13 +427,25 @@ async def approve(
         if digest(original) != match.sha256:
             raise HTTPException(409, "Source changed after the proposal was generated")
         state.original_bytes = original
-        atomic_write(path, state.proposed_bytes)
         state.patched_sha = digest(state.proposed_bytes)
         current.stage = "testing"
         current.revision += 1
+        # Write the undo snapshot before touching source. Recovery compares both
+        # hashes, so interruption on either side of the edit is unambiguous.
+        state.persist()
+        try:
+            atomic_write(path, state.proposed_bytes)
+        except OSError:
+            state.patched_sha = None
+            state.original_bytes = None
+            current.stage = "failed"
+            current.error_message = "The proposed fix could not be written; source was not changed."
+            current.revision += 1
+            state.persist()
+            return current.model_copy(deep=True)
         result = current.model_copy(deep=True)
     # Fixed, project-detected argv only; never execute model text as a command.
-    validation = await asyncio.to_thread(workspace.verify)
+    validation = await asyncio.to_thread(workspace.verify, match.path)
     async with state.lock:
         if state.session and state.session.id == session_id and state.session.stage == "testing":
             state.session.validation = validation
@@ -368,6 +454,7 @@ async def approve(
                 None if validation.passed else "Validation failed; review or undo the patch."
             )
             state.session.revision += 1
+            state.persist()
             result = state.session.model_copy(deep=True)
     return result
 
@@ -394,4 +481,5 @@ async def undo(session_id: str, body: UndoRequest, _device: str = Depends(paired
         state.patched_sha = None
         current.stage = "undone"
         current.revision += 1
+        state.persist()
         return current.model_copy(deep=True)

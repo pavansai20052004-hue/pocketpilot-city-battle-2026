@@ -1,8 +1,10 @@
 """Canonical, bounded repository access and deterministic test selection."""
 
 import hashlib
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -187,15 +189,58 @@ class Workspace:
             numbered.append(f"{number:4}: {line}")
         return "\n".join(numbered)[:18_000]
 
-    def test_command(self) -> tuple[list[str], str] | None:
-        if (self.root / "pom.xml").is_file():
-            return (["mvn", "-q", "test"], "mvn -q test")
-        if (self.root / "pytest.ini").is_file() or (self.root / "pyproject.toml").is_file():
-            return ([sys.executable, "-m", "pytest", "-q"], "python -m pytest -q")
+    def test_command(self, source_path: str | None = None) -> tuple[list[str], str, Path] | None:
+        # Select the nearest project manifest above the approved source file.
+        # This lets a monorepo run the relevant test suite, not an unrelated root.
+        relative = Path(source_path) if source_path else Path(".")
+        if source_path and source_path not in self.files:
+            raise ValueError("Verification target is outside the source index")
+        directory = (self.root / relative).parent if source_path else self.root
+        while directory == self.root or self.root in directory.parents:
+            if (directory / "pom.xml").is_file() and not (directory / "pom.xml").is_symlink():
+                return [shutil.which("mvn") or "mvn", "-q", "test"], "mvn -q test", directory
+            if any(
+                (directory / name).is_file() and not (directory / name).is_symlink()
+                for name in ("pytest.ini", "pyproject.toml")
+            ):
+                return [sys.executable, "-m", "pytest", "-q"], "python -m pytest -q", directory
+            package = directory / "package.json"
+            if package.is_file() and not package.is_symlink():
+                try:
+                    payload = json.loads(package.read_text(encoding="utf-8"))
+                    scripts = payload.get("scripts", {})
+                    script = scripts.get("test", "")
+                except (OSError, ValueError, AttributeError):
+                    scripts = {}
+                    script = ""
+                if isinstance(script, str) and script.strip():
+                    command = script.strip().lower()
+                    recognized = command in {
+                        "vitest",
+                        "vitest run",
+                        "jest",
+                        "jest --runinband",
+                        "react-scripts test",
+                        "node --test",
+                    }
+                    if recognized and not (scripts.get("pretest") or scripts.get("posttest")):
+                        extra = ["--", "--run"] if command == "vitest" else []
+                        display = "npm run test" + (" -- --run" if extra else "")
+                        return (
+                            [shutil.which("npm") or "npm", "run", "test", *extra],
+                            display,
+                            directory,
+                        )
+                # An unsupported test script is not verification; do not fall
+                # back to a parent package that may test an unrelated project.
+                return None
+            if directory == self.root:
+                break
+            directory = directory.parent
         return None
 
-    def verify(self) -> Validation:
-        selected = self.test_command()
+    def verify(self, source_path: str | None = None) -> Validation:
+        selected = self.test_command(source_path)
         if selected is None:
             return Validation(
                 passed=False,
@@ -203,11 +248,12 @@ class Workspace:
                 exit_code=None,
                 output="No allowlisted project test command was detected.",
             )
-        argv, display = selected
+        argv, display, directory = selected
         try:
             process = subprocess.run(
                 argv,
-                cwd=self.root,
+                cwd=directory,
+                env={**os.environ, "CI": "true"},
                 shell=False,
                 capture_output=True,
                 text=True,
