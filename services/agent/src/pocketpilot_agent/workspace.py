@@ -1,5 +1,6 @@
 """Canonical, bounded repository access and deterministic test selection."""
 
+import ctypes
 import hashlib
 import json
 import os
@@ -66,7 +67,27 @@ SENSITIVE_LINE = re.compile(r"(?i)(?:api[_-]?key|password|secret|access[_-]?toke
 def _fixed_command_argv(command: str, *arguments: str) -> list[str]:
     """Build a fixed argv, using cmd.exe only for Windows batch entry points."""
     if os.name == "nt" and Path(command).suffix.lower() in {".bat", ".cmd"}:
-        command_line = subprocess.list2cmdline([command, *arguments])
+        command_path = Path(command)
+        if command_path.name.lower() in {"npm.cmd", "npm.bat"}:
+            node = shutil.which("node")
+            npm_cli = command_path.parent / "node_modules" / "npm" / "bin" / "npm-cli.js"
+            if node and npm_cli.is_file() and not npm_cli.is_symlink():
+                # Run npm's fixed CLI through node.exe directly. Passing a quoted
+                # .cmd path through cmd.exe breaks on spaces in Program Files.
+                return [node, str(npm_cli), *arguments]
+
+        executable = command
+        if " " in executable:
+            # cmd.exe does not follow the usual Windows argv quoting rules. Use
+            # the filesystem's short path so the /c payload needs no quotes.
+            required = ctypes.windll.kernel32.GetShortPathNameW(executable, None, 0)
+            if required:
+                buffer = ctypes.create_unicode_buffer(required + 1)
+                if ctypes.windll.kernel32.GetShortPathNameW(executable, buffer, len(buffer)):
+                    executable = buffer.value
+        if " " in executable:
+            raise OSError("The Windows test launcher path cannot be started safely.")
+        command_line = subprocess.list2cmdline([executable, *arguments])
         return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", command_line]
     return [command, *arguments]
 

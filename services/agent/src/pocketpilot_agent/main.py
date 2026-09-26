@@ -12,14 +12,18 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from .github_publish import GitBaseline, GitHubPublisher, GitPublishError, commit_message
 from .history import SessionHistoryStore
 from .models import (
     Analysis,
     ApprovalRequest,
+    GitHubPublishRequest,
+    GitHubPublishState,
     NewSessionRequest,
     PairRequest,
     Proposal,
     ProposedFile,
+    PublishConfirmationRequest,
     Session,
     UndoRequest,
     WorkspaceRequest,
@@ -27,6 +31,8 @@ from .models import (
 from .provider import MODEL, OllamaProvider, ProviderError
 from .recovery import RecoveryStore
 from .workspace import SourceMatch, Workspace, digest
+
+DEVICE_TOKEN_TTL_SECONDS = 36 * 60 * 60
 
 
 def text_field(value: object, fallback: str, limit: int = 1500) -> str:
@@ -45,9 +51,10 @@ class AgentState:
         self.proposed_bytes: bytes | None = None
         self.original_bytes: bytes | None = None
         self.patched_sha: str | None = None
+        self.git_baseline: GitBaseline | None = None
         self.pairing_code: str | None = None
         self.pairing_expiry: float = 0
-        self.tokens: dict[str, str] = {}
+        self.tokens: dict[str, tuple[str, float]] = {}
         self.pair_attempts: dict[str, list[float]] = {}
         self.provider = OllamaProvider()
         try:
@@ -58,6 +65,7 @@ class AgentState:
                 self.proposed_bytes,
                 self.original_bytes,
                 self.patched_sha,
+                self.git_baseline,
             ) = self.recovery.load()
             self.reconcile_recovery()
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -73,6 +81,7 @@ class AgentState:
             self.proposed_bytes,
             self.original_bytes,
             self.patched_sha,
+            self.git_baseline,
         )
         if self.session:
             self.history.record(self.session)
@@ -87,6 +96,12 @@ class AgentState:
                 # The journal was saved, but the process stopped before the edit.
                 self.patched_sha = None
                 self.original_bytes = None
+                self.git_baseline = None
+                if self.session.github_publish:
+                    self.session.github_publish.status = "unavailable"
+                    self.session.github_publish.detail = (
+                        "The fix was not applied, so there is nothing to publish."
+                    )
                 if self.session.stage in {"verified", "failed"}:
                     self.session.stage = "undone"
                     self.session.error_message = None
@@ -111,6 +126,14 @@ class AgentState:
             )
             self.session.revision += 1
             self.persist()
+        if self.session.github_publish and self.session.github_publish.status == "committing":
+            self.session.github_publish.status = "commit_failed"
+            self.session.github_publish.detail = "The laptop restarted during the commit. Retry to safely resume or inspect Git first."
+            self.persist()
+        elif self.session.github_publish and self.session.github_publish.status == "pushing":
+            self.session.github_publish.status = "upload_failed"
+            self.session.github_publish.detail = "The laptop restarted during upload. Retry checks GitHub first and reuses the same commit."
+            self.persist()
 
     def reset_session(self) -> None:
         self.session = None
@@ -118,6 +141,7 @@ class AgentState:
         self.proposed_bytes = None
         self.original_bytes = None
         self.patched_sha = None
+        self.git_baseline = None
 
 
 app = FastAPI(title="PocketPilot City Battle Agent", version="0.1.0")
@@ -134,6 +158,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 state = AgentState()
+github_publisher = GitHubPublisher()
 
 
 def loopback_only(request: Request) -> None:
@@ -142,13 +167,21 @@ def loopback_only(request: Request) -> None:
         raise HTTPException(403, "Desktop controls are available only on this laptop")
 
 
+def prune_expired_tokens() -> None:
+    now = time.time()
+    for token, (_device_name, expires_at) in list(state.tokens.items()):
+        if expires_at <= now:
+            state.tokens.pop(token, None)
+
+
 def paired_only(authorization: str | None = Header(default=None)) -> str:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Pair the phone before using this endpoint")
     token = authorization[7:]
+    prune_expired_tokens()
     for known in state.tokens:
         if secrets.compare_digest(token, known):
-            return state.tokens[known]
+            return known
     raise HTTPException(401, "Invalid or expired device token")
 
 
@@ -160,6 +193,7 @@ def active_session(session_id: str) -> Session:
 
 
 async def snapshot() -> dict:
+    prune_expired_tokens()
     workspace = state.workspace
     return {
         "workspace": {
@@ -232,9 +266,19 @@ async def pair(request: Request, body: PairRequest) -> dict:
         ):
             raise HTTPException(401, "Pairing code is invalid or expired")
         token = secrets.token_urlsafe(32)
-        state.tokens[token] = body.device_name
+        state.tokens[token] = (body.device_name, time.time() + DEVICE_TOKEN_TTL_SECONDS)
         state.pairing_code = None
-    return {"token": token, "device_name": body.device_name}
+    return {
+        "token": token,
+        "device_name": body.device_name,
+        "expires_at": int(time.time() + DEVICE_TOKEN_TTL_SECONDS),
+    }
+
+
+@app.post("/api/unpair")
+async def unpair(_token: str = Depends(paired_only)) -> dict:
+    state.tokens.pop(_token, None)
+    return {"revoked": True}
 
 
 @app.get("/api/state")
@@ -295,7 +339,12 @@ async def create_session(body: NewSessionRequest, _device: str = Depends(paired_
         if workspace is None:
             raise HTTPException(409, "Select a project folder on the desktop first")
         if state.session and state.patched_sha is not None:
-            raise HTTPException(409, "Undo the existing patch before starting another session")
+            if state.session.github_publish and state.session.github_publish.status == "pushed":
+                # The verified fix is already part of Git history. Archive this
+                # session and retain the source as-is; do not discard the commit.
+                state.reset_session()
+            else:
+                raise HTTPException(409, "Undo the existing patch before starting another session")
         state.reset_session()
         match = workspace.locate(body.error_text)
         state.match = match
@@ -434,6 +483,30 @@ async def approve(
             raise HTTPException(409, "Source changed after the proposal was generated")
         state.original_bytes = original
         state.patched_sha = digest(state.proposed_bytes)
+        state.git_baseline = None
+        try:
+            state.git_baseline = await asyncio.to_thread(
+                github_publisher.capture_baseline, workspace, match.path, match.sha256
+            )
+            current.github_publish = GitHubPublishState(
+                status="waiting",
+                repository=state.git_baseline.repository,
+                branch=state.git_baseline.remote_branch,
+                path=state.git_baseline.path,
+                detail="Waiting for project checks to pass.",
+            )
+        except (GitPublishError, OSError) as exc:
+            state.git_baseline = None
+            detail = (
+                str(exc)
+                if isinstance(exc, GitPublishError)
+                else "The Git repository could not be safely inspected on the laptop."
+            )
+            current.github_publish = GitHubPublishState(
+                status="unavailable",
+                path=match.path,
+                detail=detail,
+            )
         current.stage = "testing"
         current.revision += 1
         # Write the undo snapshot before touching source. Recovery compares both
@@ -456,6 +529,15 @@ async def approve(
         if state.session and state.session.id == session_id and state.session.stage == "testing":
             state.session.validation = validation
             state.session.stage = "verified" if validation.passed else "failed"
+            if state.session.github_publish and state.session.github_publish.status == "waiting":
+                if validation.passed and state.git_baseline:
+                    state.session.github_publish.status = "ready"
+                    state.session.github_publish.detail = "Checks passed. Review the destination and explicitly confirm from the phone to publish."
+                else:
+                    state.session.github_publish.status = "unavailable"
+                    state.session.github_publish.detail = (
+                        "Publishing is available only after the selected project checks pass."
+                    )
             state.session.error_message = (
                 None if validation.passed else "Validation failed; review or undo the patch."
             )
@@ -473,6 +555,22 @@ async def undo(session_id: str, body: UndoRequest, _device: str = Depends(paired
             raise HTTPException(409, "Undo does not match the current session")
         if current.stage not in {"verified", "failed"}:
             raise HTTPException(409, "No applied patch can be undone at this stage")
+        if current.github_publish and (
+            current.github_publish.status
+            in {
+                "awaiting_desktop_confirmation",
+                "committing",
+                "pushing",
+                "pushed",
+                "commit_failed",
+                "upload_failed",
+            }
+            or current.github_publish.commit_sha
+        ):
+            raise HTTPException(
+                409,
+                "A GitHub commit may exist or be pending; inspect the desktop publish state before undoing",
+            )
         if (
             state.workspace is None
             or state.match is None
@@ -485,7 +583,174 @@ async def undo(session_id: str, body: UndoRequest, _device: str = Depends(paired
             raise HTTPException(409, "Source changed after the fix; automatic undo is unsafe")
         atomic_write(path, state.original_bytes)
         state.patched_sha = None
+        state.git_baseline = None
         current.stage = "undone"
         current.revision += 1
         state.persist()
         return current.model_copy(deep=True)
+
+
+@app.post("/api/sessions/{session_id}/github/publish")
+async def request_verified_publish(
+    session_id: str,
+    body: GitHubPublishRequest,
+    _device: str = Depends(paired_only),
+) -> Session:
+    try:
+        message = commit_message(body.message)
+    except GitPublishError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    async with state.lock:
+        current = active_session(session_id)
+        publish = current.github_publish
+        if (
+            current.stage != "verified"
+            or current.validation is None
+            or not current.validation.passed
+        ):
+            raise HTTPException(
+                409, "GitHub publish is available only after the approved fix passes its checks"
+            )
+        if current.revision != body.revision:
+            raise HTTPException(
+                409, "The verified session changed; review it again before publishing"
+            )
+        if state.workspace is None or state.match is None or state.patched_sha is None:
+            raise HTTPException(409, "The verified source snapshot is no longer available")
+        if state.git_baseline is None or publish is None:
+            raise HTTPException(
+                409,
+                publish.detail if publish and publish.detail else "GitHub publish is unavailable",
+            )
+        if publish.status in {"awaiting_desktop_confirmation", "committing", "pushing"}:
+            raise HTTPException(409, "A GitHub publish action is already running")
+        if publish.status not in {"ready", "commit_failed", "upload_failed"}:
+            if publish.status == "pushed":
+                return current.model_copy(deep=True)
+            raise HTTPException(409, "This session is not ready for a GitHub publish action")
+        if publish.message and publish.message != message:
+            raise HTTPException(
+                409, "This publish request already has a fixed message; retry must reuse it"
+            )
+        publish.status = "awaiting_desktop_confirmation"
+        publish.message = publish.message or message
+        publish.detail = (
+            "Phone request received. Review the exact destination on the laptop dashboard "
+            "and confirm there before Git creates or uploads a commit."
+        )
+        current.revision += 1
+        state.persist()
+        return current.model_copy(deep=True)
+
+
+async def perform_publish(session_id: str, expected_revision: int) -> Session:
+    async with state.lock:
+        current = active_session(session_id)
+        publish = current.github_publish
+        if current.stage != "verified" or not current.validation or not current.validation.passed:
+            raise HTTPException(409, "Only a verified fix can be published")
+        if current.revision != expected_revision:
+            raise HTTPException(409, "The session changed; refresh and review it again")
+        if publish is None or publish.status != "awaiting_desktop_confirmation":
+            raise HTTPException(409, "There is no phone publish request awaiting confirmation")
+        if state.workspace is None or state.match is None or state.patched_sha is None:
+            raise HTTPException(409, "The verified source snapshot is no longer available")
+        if state.git_baseline is None:
+            raise HTTPException(409, "The GitHub destination is no longer available")
+        workspace = state.workspace
+        baseline = state.git_baseline
+        patched_sha = state.patched_sha
+        fixed_message = publish.message
+        prior_commit = publish.commit_sha
+        publish.status = "committing"
+        publish.detail = "Laptop confirmation received. Preparing the exact one-file commit."
+        current.revision += 1
+        operation_revision = current.revision
+        state.persist()
+
+    try:
+        commit = await asyncio.to_thread(
+            github_publisher.prepare_commit,
+            workspace,
+            baseline,
+            patched_sha,
+            session_id,
+            fixed_message or "Fix verified issue",
+        )
+        if prior_commit and commit != prior_commit:
+            raise GitPublishError(
+                "The retry did not resolve to the original verified commit; upload was stopped.",
+                commit_sha=commit,
+            )
+    except GitPublishError as exc:
+        async with state.lock:
+            current = active_session(session_id)
+            if current.github_publish:
+                current.github_publish.status = "commit_failed"
+                current.github_publish.commit_sha = (
+                    exc.commit_sha or current.github_publish.commit_sha
+                )
+                current.github_publish.detail = str(exc)
+                current.revision += 1
+                state.persist()
+            return current.model_copy(deep=True)
+
+    async with state.lock:
+        current = active_session(session_id)
+        publish = current.github_publish
+        if (
+            current.stage != "verified"
+            or current.revision != operation_revision
+            or publish is None
+            or publish.status != "committing"
+        ):
+            if publish:
+                publish.status = "commit_failed"
+                publish.commit_sha = commit
+                publish.detail = (
+                    "The session changed during commit; inspect this local commit before retrying."
+                )
+                current.revision += 1
+                state.persist()
+            raise HTTPException(
+                409, "The verified session changed during commit; no upload was attempted"
+            )
+        publish.commit_sha = commit
+        publish.status = "pushing"
+        publish.detail = "Commit created locally. Checking the GitHub branch before upload."
+        current.revision += 1
+        operation_revision = current.revision
+        state.persist()
+
+    try:
+        await asyncio.to_thread(github_publisher.push_commit, workspace, baseline, commit)
+    except GitPublishError as exc:
+        async with state.lock:
+            current = active_session(session_id)
+            if current.github_publish:
+                current.github_publish.status = "upload_failed"
+                current.github_publish.commit_sha = commit
+                current.github_publish.detail = str(exc)
+                current.revision += 1
+                state.persist()
+            return current.model_copy(deep=True)
+
+    async with state.lock:
+        current = active_session(session_id)
+        if current.github_publish and current.revision == operation_revision:
+            current.github_publish.status = "pushed"
+            current.github_publish.detail = (
+                "GitHub confirmed this exact commit on the selected branch."
+            )
+            current.revision += 1
+            state.persist()
+        return current.model_copy(deep=True)
+
+
+@app.post(
+    "/api/sessions/{session_id}/github/publish/confirm",
+    dependencies=[Depends(loopback_only)],
+)
+async def confirm_publish(session_id: str, body: PublishConfirmationRequest) -> Session:
+    return await perform_publish(session_id, body.revision)

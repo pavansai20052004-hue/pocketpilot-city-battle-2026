@@ -58,6 +58,10 @@ class SessionHistoryStore:
             check_passed=session.validation.passed if session.validation else None,
             check_command=session.validation.command if session.validation else None,
             updated_at=int(time.time()),
+            github_status=session.github_publish.status if session.github_publish else None,
+            repository=session.github_publish.repository if session.github_publish else None,
+            branch=session.github_publish.branch if session.github_publish else None,
+            commit_sha=session.github_publish.commit_sha if session.github_publish else None,
         )
         if previous:
             item.updated_at = (

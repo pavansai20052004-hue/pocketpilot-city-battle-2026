@@ -11,6 +11,7 @@ import os
 import tempfile
 from pathlib import Path
 
+from .github_publish import GitBaseline
 from .models import Session
 from .workspace import SourceMatch, Workspace, digest
 
@@ -48,9 +49,10 @@ class RecoveryStore:
         proposed_bytes: bytes | None,
         original_bytes: bytes | None,
         patched_sha: str | None,
+        git_baseline: GitBaseline | None = None,
     ) -> None:
         document = {
-            "version": 1,
+            "version": 2,
             "workspace": str(workspace.root) if workspace else None,
             "session": session.model_dump(mode="json") if session else None,
             "match": {
@@ -64,6 +66,7 @@ class RecoveryStore:
             "proposed_bytes": encode_bytes(proposed_bytes),
             "original_bytes": encode_bytes(original_bytes),
             "patched_sha": patched_sha,
+            "git_baseline": git_baseline.model_dump(mode="json") if git_baseline else None,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(
@@ -83,14 +86,20 @@ class RecoveryStore:
     def load(
         self,
     ) -> tuple[
-        Workspace | None, Session | None, SourceMatch | None, bytes | None, bytes | None, str | None
+        Workspace | None,
+        Session | None,
+        SourceMatch | None,
+        bytes | None,
+        bytes | None,
+        str | None,
+        GitBaseline | None,
     ]:
         if not self.path.is_file():
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
         if self.path.stat().st_size > 1_000_000:
             raise ValueError("Recovery record exceeds size limit")
         document = json.loads(self.path.read_text(encoding="utf-8"))
-        if document.get("version") != 1:
+        if document.get("version") not in {1, 2}:
             raise ValueError("Unsupported recovery record")
         workspace = Workspace(document["workspace"]) if document.get("workspace") else None
         session = Session.model_validate(document["session"]) if document.get("session") else None
@@ -99,6 +108,11 @@ class RecoveryStore:
         proposed = decode_bytes(document.get("proposed_bytes"))
         original = decode_bytes(document.get("original_bytes"))
         patched_sha = document.get("patched_sha")
+        git_baseline = (
+            GitBaseline.model_validate(document["git_baseline"])
+            if document.get("git_baseline")
+            else None
+        )
         if match and workspace:
             workspace.safe_file(match.path)
             if digest(match.text.encode("utf-8")) != match.sha256:
@@ -108,4 +122,9 @@ class RecoveryStore:
                 raise ValueError("Applied patch recovery record is incomplete")
             if digest(original) != match.sha256 or digest(proposed) != patched_sha:
                 raise ValueError("Applied patch recovery hashes are invalid")
-        return workspace, session, match, proposed, original, patched_sha
+        if git_baseline:
+            if not (workspace and match and session and patched_sha):
+                raise ValueError("GitHub publish recovery record is incomplete")
+            if git_baseline.path != match.path or git_baseline.original_sha != match.sha256:
+                raise ValueError("GitHub publish recovery does not match the approved source")
+        return workspace, session, match, proposed, original, patched_sha, git_baseline

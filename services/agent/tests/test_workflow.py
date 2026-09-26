@@ -8,7 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pocketpilot_agent import main as agent
-from pocketpilot_agent.models import Proposal, ProposedFile, Session
+from pocketpilot_agent.github_publish import GitBaseline
+from pocketpilot_agent.models import GitHubPublishState, Proposal, ProposedFile, Session, Validation
 from pocketpilot_agent.workspace import Workspace, digest
 
 
@@ -221,6 +222,170 @@ def test_unpaired_phone_cannot_read_state_or_apply(tmp_path, client):
     client.post("/api/workspace", json={"path": str(tmp_path)})
     assert client.get("/api/state").status_code == 401
     assert client.post("/api/sessions", json={"error_text": "some error"}).status_code == 401
+
+
+def test_github_publish_requires_verified_phone_request_and_loopback_confirmation(
+    tmp_path, client, monkeypatch
+):
+    folder = project(tmp_path)
+    assert client.post("/api/workspace", json={"path": str(folder)}).status_code == 200
+    token = pair(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    match = agent.state.workspace.locate("user_service.py:2: TypeError")
+    assert match is not None
+    original = folder.joinpath(match.path).read_bytes()
+    patched = original.replace(b'return user["name"]', b'return "Unknown"')
+    folder.joinpath(match.path).write_bytes(patched)
+    baseline = GitBaseline(
+        root=str(folder),
+        head="1" * 40,
+        branch="main",
+        remote="submission-origin",
+        remote_branch="main",
+        repository="pavansai20052004-hue/pocketpilot-city-battle-2026",
+        path=match.path,
+        original_sha=match.sha256,
+    )
+    session = Session(
+        id="publish-contract",
+        revision=4,
+        stage="root_cause_found",
+        source="text",
+        error_text="user_service.py:2: TypeError",
+    )
+    agent.state.session = session
+    agent.state.match = match
+    agent.state.original_bytes = original
+    agent.state.proposed_bytes = patched
+    agent.state.patched_sha = digest(patched)
+    agent.state.git_baseline = baseline
+    agent.state.persist()
+    endpoint = f"/api/sessions/{session.id}/github/publish"
+    before_verified = client.post(
+        endpoint,
+        headers=headers,
+        json={"revision": session.revision, "message": "Fix user fallback"},
+    )
+    assert before_verified.status_code == 409
+
+    session.stage = "verified"
+    session.validation = Validation(
+        passed=True, command="python -m pytest -q", exit_code=0, output="1 passed"
+    )
+    session.github_publish = GitHubPublishState(
+        status="ready",
+        repository=baseline.repository,
+        branch=baseline.remote_branch,
+        path=baseline.path,
+    )
+    agent.state.persist()
+    commit = "a" * 40
+    git_calls = []
+
+    def prepare(*_args):
+        git_calls.append("commit")
+        return commit
+
+    def push(*_args):
+        git_calls.append("push")
+
+    monkeypatch.setattr(agent.github_publisher, "prepare_commit", prepare)
+    monkeypatch.setattr(agent.github_publisher, "push_commit", push)
+    queued = client.post(
+        endpoint,
+        headers=headers,
+        json={"revision": session.revision, "message": "Fix user fallback"},
+    )
+    assert queued.status_code == 200
+    assert queued.json()["github_publish"]["status"] == "awaiting_desktop_confirmation"
+    assert git_calls == []
+
+    pushed = client.post(
+        f"/api/sessions/{session.id}/github/publish/confirm",
+        json={"revision": queued.json()["revision"]},
+    )
+    assert pushed.status_code == 200
+    assert git_calls == ["commit", "push"]
+    assert pushed.json()["github_publish"]["status"] == "pushed"
+    assert pushed.json()["github_publish"]["commit_sha"] == commit
+    assert agent.state.history.items[0].github_status == "pushed"
+    assert agent.state.history.items[0].commit_sha == commit
+    assert (
+        client.post(
+            f"/api/sessions/{session.id}/undo",
+            headers=headers,
+            json={"revision": pushed.json()["revision"]},
+        ).status_code
+        == 409
+    )
+    next_session = client.post(
+        "/api/sessions",
+        headers=headers,
+        json={"error_text": "user_service.py:2: TypeError: follow-up", "source": "text"},
+    )
+    assert next_session.status_code == 202
+    assert next_session.json()["stage"] == "analyzing"
+    assert folder.joinpath(match.path).read_bytes() == patched
+
+
+def test_github_desktop_confirmation_rejects_non_loopback_peer():
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    request = Request({"type": "http", "client": ("192.0.2.15", 45000)})
+    with pytest.raises(HTTPException) as error:
+        agent.loopback_only(request)
+    assert error.value.status_code == 403
+
+
+def test_phone_unpair_revokes_token_and_expired_tokens_cannot_be_used(client, monkeypatch):
+    token = pair(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    revoked = client.post("/api/unpair", headers=headers, json={})
+    assert revoked.status_code == 200
+    assert revoked.json() == {"revoked": True}
+    assert client.get("/api/state", headers=headers).status_code == 401
+
+    agent.state.tokens["expired-token"] = ("old phone", 100)
+    monkeypatch.setattr(agent.time, "time", lambda: 101)
+    assert (
+        client.get("/api/state", headers={"Authorization": "Bearer expired-token"}).status_code
+        == 401
+    )
+    assert "expired-token" not in agent.state.tokens
+
+
+def test_undo_is_blocked_when_commit_outcome_is_uncertain(tmp_path, client):
+    folder = project(tmp_path)
+    client.post("/api/workspace", json={"path": str(folder)})
+    token = pair(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    match = agent.state.workspace.locate("user_service.py:2: TypeError")
+    assert match is not None
+    original = folder.joinpath(match.path).read_bytes()
+    patched = original.replace(b'return user["name"]', b'return "Unknown"')
+    folder.joinpath(match.path).write_bytes(patched)
+    agent.state.match = match
+    agent.state.original_bytes = original
+    agent.state.patched_sha = digest(patched)
+    session = Session(
+        id="uncertain-commit",
+        revision=3,
+        stage="verified",
+        source="text",
+        error_text="user_service.py:2: TypeError",
+        validation=Validation(passed=True, command="pytest -q", exit_code=0, output="1 passed"),
+        github_publish=GitHubPublishState(status="commit_failed", commit_sha=None),
+    )
+    agent.state.session = session
+
+    response = client.post(
+        f"/api/sessions/{session.id}/undo",
+        headers=headers,
+        json={"revision": session.revision},
+    )
+    assert response.status_code == 409
+    assert folder.joinpath(match.path).read_bytes() == patched
 
 
 def test_ambiguous_file_is_not_patchable(tmp_path, client):

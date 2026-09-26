@@ -24,6 +24,16 @@ export type Validation = {
   output: string;
 };
 
+export type GitHubPublishState = {
+  status: 'waiting' | 'ready' | 'unavailable' | 'awaiting_desktop_confirmation' | 'committing' | 'pushing' | 'pushed' | 'commit_failed' | 'upload_failed';
+  repository: string | null;
+  branch: string | null;
+  path: string | null;
+  commit_sha: string | null;
+  message: string | null;
+  detail: string | null;
+};
+
 export type Session = {
   id: string;
   revision: number;
@@ -43,6 +53,7 @@ export type Session = {
   proposal: Proposal | null;
   validation: Validation | null;
   error_message: string | null;
+  github_publish: GitHubPublishState | null;
 };
 
 export type SessionHistoryItem = {
@@ -54,6 +65,10 @@ export type SessionHistoryItem = {
   check_passed: boolean | null;
   check_command: string | null;
   updated_at: number;
+  github_status: GitHubPublishState['status'] | null;
+  repository: string | null;
+  branch: string | null;
+  commit_sha: string | null;
 };
 
 export type AgentState = {
@@ -65,7 +80,7 @@ export type AgentState = {
   history_error?: string | null;
 };
 
-export type PairResult = { token: string; device_name: string };
+export type PairResult = { token: string; device_name: string; expires_at: number };
 
 export function normalizeAgentAddress(value: string): string {
   const trimmed = value.trim().replace(/\/+$/, '');

@@ -54,10 +54,11 @@ a{color:inherit;text-decoration:none}
 .readiness-intro h2,.panel h2{margin:0;color:#f4f7f2;letter-spacing:-.04em}
 .readiness-intro h2{font-size:24px}
 .readiness-intro p:last-child{color:#9daa9f;font-size:12px;line-height:1.5;margin:10px 0 0}
-.readiness-items{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.readiness-items{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
 .readiness-items>div{background:#0b100c;border:1px solid #28362b;border-radius:12px;padding:13px 15px;display:flex;flex-direction:column;min-width:0}
 .readiness-icon{font-size:20px;color:#c9ff43;margin-bottom:18px;line-height:1}
 .readiness-items small{color:#879b89;font-size:9px;white-space:nowrap}.readiness-items strong{font-size:16px;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.readiness-note{grid-column:1/-1;margin:2px 3px 0;color:#d5bd76;font-size:11px;line-height:1.5}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:20px}
 .panel{background:#101611;border:1px solid #2a362c;border-radius:18px;padding:26px 28px;min-width:0}
 .panel-heading{display:flex;justify-content:space-between;gap:15px;align-items:start}
@@ -90,6 +91,8 @@ a{color:inherit;text-decoration:none}
 .session-stats{display:grid;grid-template-columns:1fr 1fr 2fr;margin-top:23px;border-top:1px solid #263429;padding-top:17px;gap:15px}
 .session-stats>div{display:flex;flex-direction:column;gap:7px;min-width:0}.session-stats strong{font-size:13px;overflow-wrap:anywhere}.mono{font-family:"Cascadia Code",Consolas,monospace;color:#c9ff43}
 .inline-error{color:#ff8b7b;font-size:12px}.validation-line{margin-top:18px;color:#a6e5c8;font-size:12px}.validation-line code{color:#c9ff43}
+.github-line{display:flex;flex-direction:column;gap:7px;margin-top:16px;padding:14px 16px;border:1px solid #34472e;border-radius:12px;background:#0b100c;color:#a6e5c8;font-size:12px;overflow-wrap:anywhere}.github-line strong{color:#c9ff43;font-family:"Cascadia Code",Consolas,monospace;font-size:10px;letter-spacing:.1em}.github-line code{color:#c9ff43;font-family:"Cascadia Code",Consolas,monospace}.github-line small{color:#91a092;font-size:10px;line-height:1.5}
+.publish-confirm{align-self:flex-start;border:0;border-radius:9px;background:#c9ff43;color:#0a0e09;padding:12px 16px;font-size:10px;font-weight:900;letter-spacing:.06em;cursor:pointer}.publish-confirm:disabled{opacity:.55;cursor:wait}
 .history-list{display:grid;gap:10px}
 .history-item{background:#0b100c;border:1px solid #28362b;border-radius:12px;padding:16px 18px}
 .history-item-top,.history-item-meta{display:flex;justify-content:space-between;align-items:center;gap:14px}

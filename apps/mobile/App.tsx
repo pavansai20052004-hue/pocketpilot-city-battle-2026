@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Image,
   KeyboardAvoidingView,
@@ -232,20 +233,56 @@ function ProposalPanel({ session, onApprove, onReject, busy }: { session: Sessio
   </Panel>;
 }
 
-function ResultPanel({ session, onUndo, onNew, busy }: { session: Session; onUndo: () => void; onNew: () => void; busy: boolean }) {
+function ResultPanel({ session, onUndo, onNew, onPublish, publishMessage, onPublishMessage, busy }: {
+  session: Session;
+  onUndo: () => void;
+  onNew: () => void;
+  onPublish: () => void;
+  publishMessage: string;
+  onPublishMessage: (message: string) => void;
+  busy: boolean;
+}) {
   const verified = session.stage === 'verified';
   const undone = session.stage === 'undone';
   const patchApplied = verified || (session.stage === 'failed' && session.validation !== null);
   const patchNotGenerated = session.stage === 'failed' && !session.validation;
-  return <Panel accent={verified}>
+  const publish = session.github_publish;
+  const pushed = publish?.status === 'pushed';
+  const undoBlocked = Boolean(publish && ['awaiting_desktop_confirmation', 'committing', 'pushing', 'commit_failed', 'upload_failed', 'pushed'].includes(publish.status));
+  const retryPublish = publish?.status === 'upload_failed' || publish?.status === 'commit_failed';
+  const awaitingDesktop = publish?.status === 'awaiting_desktop_confirmation';
+  return <>
+  <Panel accent={verified}>
     <Eyebrow index={verified ? '✓' : undone ? '↶' : '!'}>{verified ? 'MISSION COMPLETE' : undone ? 'CHANGE REVERSED' : 'NEEDS ATTENTION'}</Eyebrow>
     <Text style={[styles.resultTitle, { color: verified ? c.lime : undone ? c.ink : c.coral }]}>{verified ? 'Fix verified.' : undone ? 'Fix undone.' : patchNotGenerated ? 'Patch not generated.' : 'Verification failed.'}</Text>
     <Text style={styles.body}>{verified ? 'The approved change passed the selected project check.' : undone ? 'The project files were restored to their pre-fix state.' : session.error_message || 'The change could not be verified. Review the test output before continuing.'}</Text>
     {session.validation && <View style={styles.validation}><View style={styles.splitRow}><Label>CHECK RUN</Label><Text style={{ color: session.validation.passed ? c.lime : c.coral }}>{session.validation.passed ? 'PASSED' : 'FAILED'}</Text></View><Text style={styles.validationCommand}>{session.validation.command}</Text><Text style={styles.validationOutput} numberOfLines={12}>{session.validation.output}</Text></View>}
-    {patchApplied && <><Button onPress={onUndo} disabled={busy} tone={verified ? 'secondary' : 'danger'} icon="↶">UNDO FIX</Button><View style={styles.buttonGap} /></>}
-    <Button onPress={onNew} disabled={busy || patchApplied} tone={verified ? 'secondary' : 'primary'}>START A NEW SESSION</Button>
-    {patchApplied && <Text style={styles.fieldHint}>Undo the applied patch before starting another session.</Text>}
-  </Panel>;
+    {patchApplied && <><Button onPress={onUndo} disabled={busy || undoBlocked} tone={verified ? 'secondary' : 'danger'} icon="↶">UNDO FIX</Button><View style={styles.buttonGap} /></>}
+    <Button onPress={onNew} disabled={busy || (patchApplied && !pushed)} tone={verified ? 'secondary' : 'primary'}>{pushed ? 'START NEXT SESSION' : 'START A NEW SESSION'}</Button>
+    {patchApplied && <Text style={styles.fieldHint}>{pushed ? 'This verified fix is committed and pushed. It remains in the project; the session will be archived when you start the next one.' : undoBlocked ? 'A commit may exist or a publish request is pending. Resolve the laptop publish state before undoing or starting another session.' : 'Undo the applied patch before starting another session.'}</Text>}
+  </Panel>
+  {verified && publish && <Panel accent={publish.status === 'pushed'}>
+    <Eyebrow index="GITHUB / VERIFIED FIX">PUBLISH FROM THE LAPTOP</Eyebrow>
+    <Text style={styles.proposalTitle}>{publish.status === 'pushed' ? 'Published.' : publish.status === 'unavailable' ? 'Publishing unavailable.' : 'Keep the proof with the code.'}</Text>
+    {publish.repository && <Text style={styles.pathText}>{publish.repository}  ·  {publish.branch}</Text>}
+    {publish.path && <Text style={styles.fieldHint}>{publish.path}</Text>}
+    {publish.commit_sha && <Text style={styles.fieldHint}>Commit {publish.commit_sha.slice(0, 12)}</Text>}
+    {publish.detail && <Text style={styles.body}>{publish.detail}</Text>}
+    {publish.status === 'ready' && <>
+      <Text style={styles.fieldLabel}>COMMIT MESSAGE</Text>
+      <TextInput accessibilityLabel="GitHub commit message" value={publishMessage} onChangeText={onPublishMessage} maxLength={72} placeholder="Describe the verified fix" placeholderTextColor={c.dim} style={styles.input} />
+      <Text style={styles.fieldHint}>Request this exact file and message for desktop confirmation. GitHub credentials stay on the laptop; configured Git hooks may run there.</Text>
+      <View style={styles.buttonGap} /><Button onPress={onPublish} disabled={busy || !publishMessage.trim()} icon="↗">REQUEST LAPTOP PUBLISH</Button>
+    </>}
+    {retryPublish && <>
+      <Text style={styles.fieldHint}>Retry keeps the same commit and message. The laptop will check GitHub before attempting upload again.</Text>
+      <View style={styles.buttonGap} /><Button onPress={onPublish} disabled={busy} icon="↻">REQUEST RETRY</Button>
+    </>}
+    {awaitingDesktop && <Text style={styles.fieldHint}>Request sent. Review the repository, branch, file, and commit message on the laptop dashboard, then confirm there to create and push the commit.</Text>}
+    {(publish.status === 'committing' || publish.status === 'pushing') && <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14 }}><ActivityIndicator color={c.lime} /><Text style={styles.body}>{publish.status === 'committing' ? 'Creating the reviewed one-file commit…' : 'Checking and uploading the exact commit…'}</Text></View>}
+    {publish.status === 'unavailable' && <Text style={styles.fieldHint}>You can still use the verified fix locally. Review the laptop Git repository setup to enable publishing next time.</Text>}
+  </Panel>}
+  </>;
 }
 
 function HistoryPanel({ items, historyError }: { items: SessionHistoryItem[]; historyError?: string | null }) {
@@ -262,6 +299,7 @@ function HistoryPanel({ items, historyError }: { items: SessionHistoryItem[]; hi
       <Label>{item.source.toUpperCase()} INPUT</Label>
       <Text style={styles.pathText}>{item.location ? `${item.location.path}:${item.location.line}` : 'Source location not established'}</Text>
       <Text style={styles.fieldHint}>{item.check_passed === null ? 'No check completed' : `${item.check_passed ? 'CHECK PASSED' : 'CHECK FAILED'}${item.check_command ? ` · ${item.check_command}` : ''}`}</Text>
+      {item.github_status && <Text style={styles.fieldHint}>{`GITHUB ${item.github_status.replaceAll('_', ' ').toUpperCase()}${item.repository ? ` · ${item.repository}${item.branch ? `/${item.branch}` : ''}` : ''}${item.commit_sha ? ` · ${item.commit_sha.slice(0, 12)}` : ''}`}</Text>}
     </Panel>) : <Panel accent>
       <Eyebrow index="01">NO SAVED SESSIONS</Eyebrow>
       <Text style={styles.proposalTitle}>Your next debug run starts the history.</Text>
@@ -301,8 +339,8 @@ function SettingsPanel({
       <Text selectable style={styles.settingsValue}>{state?.workspace?.path || 'No project selected on the laptop'}</Text>
       <Text style={styles.fieldHint}>The laptop agent inspects only the project folder selected from its dashboard.</Text>
       {agentUrl && <>
-        <Text style={styles.fieldHint}>This clears the saved link on this phone. To revoke its laptop-side token, use REVOKE in the desktop dashboard.</Text>
-        <Button onPress={onForgetPairing} tone="danger" icon="↗">CLEAR SAVED PHONE LINK</Button>
+        <Text style={styles.fieldHint}>Unpairing revokes this device token on the laptop. If the laptop is offline, the token expires automatically within 36 hours.</Text>
+        <Button onPress={onForgetPairing} tone="danger" icon="↗">UNPAIR THIS DEVICE</Button>
       </>}
     </Panel>
     <Panel>
@@ -337,6 +375,7 @@ export default function App() {
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [voiceListening, setVoiceListening] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
+  const [publishMessage, setPublishMessage] = useState('');
   const voiceBase = useRef('');
   const polling = useRef(false);
 
@@ -400,6 +439,16 @@ export default function App() {
     return () => clearInterval(timer);
   }, [agentUrl, token, refresh]);
 
+  useEffect(() => {
+    const current = state?.session;
+    if (!current) return;
+    setPublishMessage(
+      current.github_publish?.message
+        ?? current.proposal?.title.slice(0, 72)
+        ?? 'Fix verified issue',
+    );
+  }, [state?.session?.id]);
+
   async function pair() {
     setBusy(true); setNotice(null);
     try {
@@ -415,8 +464,18 @@ export default function App() {
   }
 
   async function disconnect() {
+    let revoked = false;
+    if (agentUrl && token) {
+      try {
+        await request(agentUrl, '/api/unpair', token, {});
+        revoked = true;
+      } catch {
+        // Local credentials are still cleared. The server token has a bounded TTL.
+      }
+    }
     await clearPairing();
-    setToken(null); setAgentUrl(null); setState(null); setConnected(false); setTab('home'); setNotice(null); setNetworkError(null);
+    setToken(null); setAgentUrl(null); setState(null); setConnected(false); setTab('home'); setNetworkError(null);
+    setNotice(revoked ? 'Phone unpaired. Its laptop token has been revoked.' : 'Phone link cleared here. The laptop token will expire within 36 hours if the laptop was offline.');
   }
 
   async function openDeviceSettings() {
@@ -441,6 +500,32 @@ export default function App() {
       void refresh();
     } catch (error) { setNotice(error instanceof Error ? error.message : 'The action did not complete.'); }
     finally { setBusy(false); }
+  }
+
+  function confirmGitHubPublish(current: Session) {
+    const target = current.github_publish;
+    if (!target?.repository || !target.branch || !target.path) {
+      setNotice('The laptop could not prepare a safe GitHub destination for this fix.');
+      return;
+    }
+    const retry = target.status === 'upload_failed' || target.status === 'commit_failed';
+    Alert.alert(
+      retry ? 'Request a GitHub publish retry?' : 'Request desktop publish confirmation?',
+      `${target.repository}  ·  ${target.branch}\n${target.path}\n\nCommit: ${publishMessage.trim()}\n\nOnly the verified file is eligible. GitHub credentials stay on the laptop. The laptop dashboard must confirm the exact target before Git runs. ${retry ? 'PocketPilot will reuse the same commit.' : 'No force-push will be used.'}`,
+      [
+        { text: 'CANCEL', style: 'cancel' },
+        {
+          text: retry ? 'REQUEST RETRY' : 'REQUEST PUBLISH',
+          onPress: () => {
+            void action(
+              `/api/sessions/${current.id}/github/publish`,
+              { revision: current.revision, message: publishMessage.trim() },
+              20000,
+            );
+          },
+        },
+      ],
+    );
   }
 
   function startAnalysis() {
@@ -604,7 +689,7 @@ export default function App() {
             <AnalysisPanel session={session} />
             {session.stage === 'root_cause_found' && <Panel><Eyebrow index="03">NEXT DECISION</Eyebrow><Text style={styles.proposalTitle}>Ready to design a fix?</Text><Text style={styles.body}>The laptop will propose a bounded diff. You can review it before any file changes.</Text><View style={styles.sectionTop}><Button onPress={() => { void action(`/api/sessions/${session.id}/proposal`, {}); }} disabled={busy || !session.analysis?.location} icon="↗">GENERATE FIX</Button></View>{!session.analysis?.location && <Text style={styles.cautionText}>A safe repository location was not established, so a patch cannot be generated.</Text>}</Panel>}
             {session.stage === 'awaiting_approval' && <ProposalPanel session={session} busy={busy} onApprove={() => { if (session.proposal) void action(`/api/sessions/${session.id}/approve`, { proposal_id: session.proposal.id, revision: session.revision }, 300000); }} onReject={() => setComposeNew(true)} />}
-            {showResult && <ResultPanel session={session} busy={busy} onUndo={() => { void action(`/api/sessions/${session.id}/undo`, { revision: session.revision }); }} onNew={() => { setComposeNew(true); setErrorText(''); }} />}
+            {showResult && <ResultPanel session={session} busy={busy} publishMessage={publishMessage} onPublishMessage={setPublishMessage} onPublish={() => confirmGitHubPublish(session)} onUndo={() => { void action(`/api/sessions/${session.id}/undo`, { revision: session.revision }); }} onNew={() => { setComposeNew(true); setErrorText(''); }} />}
             {session.stage === 'analysis_failed' && <Panel><Eyebrow index="!">ANALYSIS STOPPED</Eyebrow><Text style={styles.resultTitle}>No trusted location yet.</Text><Text style={styles.body}>{session.error_message || 'The error did not resolve to a safe source file. Review the text and try again.'}</Text><View style={styles.sectionTop}><Button onPress={() => { setErrorText(session.error_text); setComposeNew(true); }}>REVIEW ERROR TEXT</Button></View></Panel>}
             {!workingStages.has(session.stage) && !showResult && <Pressable accessibilityRole="button" onPress={() => { setErrorText(session.error_text); setComposeNew(true); }} style={styles.ghostAction}><Text style={styles.ghostActionText}>REVIEW / START ANOTHER ERROR  ↗</Text></Pressable>}
           </> : null}

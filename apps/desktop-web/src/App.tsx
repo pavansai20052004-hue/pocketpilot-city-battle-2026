@@ -117,9 +117,46 @@ function App() {
     }
   }
 
+  async function confirmGitHubPublish(session: Session) {
+    const publish = session.github_publish;
+    if (!publish || publish.status !== "awaiting_desktop_confirmation") return;
+    const approved = window.confirm(
+      `Confirm this verified GitHub publish?\n\nRepository: ${publish.repository}\nBranch: ${publish.branch}\nFile: ${publish.path}\nCommit: ${publish.message}\n\nOnly this file will be committed. Existing Git hooks may run. GitHub credentials remain on this laptop.`,
+    );
+    if (!approved) return;
+    setWorking(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = await request<Session>(`/api/sessions/${session.id}/github/publish/confirm`, {
+        method: "POST",
+        body: JSON.stringify({ revision: session.revision }),
+      });
+      setState((current) => ({ ...current, session: updated }));
+      setNotice("Desktop confirmed. PocketPilot is creating and pushing the reviewed one-file commit.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not confirm this GitHub publish.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   const session = state.session;
   const history = state.history ?? [];
   const busy = session?.stage === "analyzing" || session?.stage === "generating_fix" || session?.stage === "testing";
+  const preflight = [
+    connected,
+    state.provider.ready,
+    state.workspace.ready,
+    state.pairing.connected_devices > 0,
+  ];
+  const preflightReady = preflight.every(Boolean);
+  const preflightMissing = [
+    !connected && "desktop agent",
+    !state.provider.ready && "local model",
+    !state.workspace.ready && "workspace",
+    state.pairing.connected_devices === 0 && "paired phone",
+  ].filter(Boolean);
 
   return (
     <div className="shell">
@@ -173,6 +210,8 @@ function App() {
               <div><span className="readiness-icon">◇</span><small>LOCAL MODEL</small><strong>{state.provider.ready ? "Ready" : "Not ready"}</strong></div>
               <div><span className="readiness-icon">⌁</span><small>WORKSPACE</small><strong>{state.workspace.ready ? "Selected" : "Not selected"}</strong></div>
               <div><span className="readiness-icon">▣</span><small>PHONES PAIRED</small><strong>{state.pairing.connected_devices}</strong></div>
+              <div><span className="readiness-icon">✓</span><small>DEMO PREFLIGHT</small><strong>{preflightReady ? "Ready" : `${4 - preflightMissing.length}/4 ready`}</strong></div>
+              {!preflightReady && <p className="readiness-note">Before the demo, confirm: {preflightMissing.join(" · ")}. This check is local and does not change project files.</p>}
             </div>
           </section>
 
@@ -208,6 +247,7 @@ function App() {
                 <div className="session-stats"><div><small>STAGE</small><strong>{stateText(session.stage)}</strong></div><div><small>REVISION</small><strong>{session.revision}</strong></div><div><small>LOCATION</small><strong className="mono">{session.analysis?.location ? `${session.analysis.location.path}:${session.analysis.location.line}` : "Awaiting evidence"}</strong></div></div>
                 {session.error_message && <p className="inline-error">{session.error_message}</p>}
                 {session.validation && <div className="validation-line"><span>{session.validation.passed ? "✓" : "!"}</span> {session.validation.passed ? "Approved change passed its checks" : "The checks did not pass"} · <code>{session.validation.command}</code></div>}
+                {session.github_publish && <div className="github-line" aria-live="polite"><strong>GITHUB / {session.github_publish.status.replaceAll("_", " ").toUpperCase()}</strong>{session.github_publish.repository && <span>{session.github_publish.repository} · {session.github_publish.branch} · {session.github_publish.path}</span>}{session.github_publish.message && <span>Commit message: {session.github_publish.message}</span>}{session.github_publish.commit_sha && <code>{session.github_publish.commit_sha.slice(0, 12)}</code>}{session.github_publish.detail && <small>{session.github_publish.detail}</small>}{session.github_publish.status === "awaiting_desktop_confirmation" && <><small>Review the destination above. The paired phone cannot create or push a commit without this laptop-side approval.</small><button className="publish-confirm" disabled={working} onClick={() => void confirmGitHubPublish(session)}>CONFIRM COMMIT &amp; PUSH</button></>}<small>GitHub credentials stay on this laptop. Configured Git hooks may run during commit.</small></div>}
               </div>
             ) : (
               <div className="empty-session"><div className="empty-symbol">◌</div><div><h3>Waiting for a debug session</h3><p>Start on the iQOO. Analysis, approval, tests, and undo will appear here as they happen.</p></div></div>
@@ -221,7 +261,7 @@ function App() {
               <article className="history-item" key={item.id}>
                 <div className="history-item-top"><span className={`history-stage ${item.stage}`}>{stateText(item.stage)}</span><time>{formatDateTime(item.updated_at)}</time></div>
                 <h3>{item.title}</h3>
-                <div className="history-item-meta"><span>{item.source.toUpperCase()} INPUT</span><span className="mono">{item.location ? `${item.location.path}:${item.location.line}` : "No source location"}</span><span>{item.check_passed === null ? "No check run" : item.check_passed ? "Check passed" : "Check failed"}</span></div>
+                <div className="history-item-meta"><span>{item.source.toUpperCase()} INPUT</span><span className="mono">{item.location ? `${item.location.path}:${item.location.line}` : "No source location"}</span><span>{item.check_passed === null ? "No check run" : item.check_passed ? "Check passed" : "Check failed"}</span>{item.github_status && <span>GitHub {item.github_status.replaceAll("_", " ")}{item.repository ? ` · ${item.repository}` : ""}{item.commit_sha ? ` · ${item.commit_sha.slice(0, 8)}` : ""}</span>}</div>
               </article>
             ))}</div> : <div className="history-empty"><strong>No completed sessions yet.</strong><span>After a run finishes, its outcome will appear here.</span></div>}
             {state.history_error && <p className="inline-error">{state.history_error}</p>}

@@ -53,6 +53,26 @@ class Validation(BaseModel):
     output: str
 
 
+class GitHubPublishState(BaseModel):
+    status: Literal[
+        "waiting",
+        "ready",
+        "unavailable",
+        "awaiting_desktop_confirmation",
+        "committing",
+        "pushing",
+        "pushed",
+        "commit_failed",
+        "upload_failed",
+    ] = "waiting"
+    repository: str | None = None
+    branch: str | None = None
+    path: str | None = None
+    commit_sha: str | None = None
+    message: str | None = None
+    detail: str | None = None
+
+
 class Session(BaseModel):
     id: str
     revision: int
@@ -63,6 +83,7 @@ class Session(BaseModel):
     proposal: Proposal | None = None
     validation: Validation | None = None
     error_message: str | None = None
+    github_publish: GitHubPublishState | None = None
 
 
 class SessionHistoryItem(BaseModel):
@@ -76,6 +97,10 @@ class SessionHistoryItem(BaseModel):
     check_passed: bool | None = None
     check_command: str | None = None
     updated_at: int = Field(ge=0)
+    github_status: str | None = None
+    repository: str | None = None
+    branch: str | None = None
+    commit_sha: str | None = None
 
 
 class PairRequest(BaseModel):
@@ -98,4 +123,13 @@ class ApprovalRequest(BaseModel):
 
 
 class UndoRequest(BaseModel):
+    revision: int = Field(ge=1)
+
+
+class GitHubPublishRequest(BaseModel):
+    revision: int = Field(ge=1)
+    message: str = Field(min_length=1, max_length=200)
+
+
+class PublishConfirmationRequest(BaseModel):
     revision: int = Field(ge=1)

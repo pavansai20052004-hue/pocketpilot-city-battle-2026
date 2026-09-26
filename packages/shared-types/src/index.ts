@@ -45,6 +45,25 @@ export interface Validation {
   output: string;
 }
 
+export interface GitHubPublishState {
+  status:
+    | "waiting"
+    | "ready"
+    | "unavailable"
+    | "awaiting_desktop_confirmation"
+    | "committing"
+    | "pushing"
+    | "pushed"
+    | "commit_failed"
+    | "upload_failed";
+  repository: string | null;
+  branch: string | null;
+  path: string | null;
+  commit_sha: string | null;
+  message: string | null;
+  detail: string | null;
+}
+
 export interface Session {
   id: string;
   revision: number;
@@ -55,6 +74,7 @@ export interface Session {
   proposal: Proposal | null;
   validation: Validation | null;
   error_message: string | null;
+  github_publish: GitHubPublishState | null;
 }
 
 export interface SessionHistoryItem {
@@ -66,6 +86,10 @@ export interface SessionHistoryItem {
   check_passed: boolean | null;
   check_command: string | null;
   updated_at: number;
+  github_status: GitHubPublishState["status"] | null;
+  repository: string | null;
+  branch: string | null;
+  commit_sha: string | null;
 }
 
 export interface AgentState {
@@ -86,6 +110,7 @@ export interface Health {
 export interface PairResponse {
   token: string;
   device_name: string;
+  expires_at: number;
 }
 
 export interface PairingCode {
