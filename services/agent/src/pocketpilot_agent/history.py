@@ -60,7 +60,9 @@ class SessionHistoryStore:
             updated_at=int(time.time()),
         )
         if previous:
-            item.updated_at = previous.updated_at if previous.stage == item.stage else item.updated_at
+            item.updated_at = (
+                previous.updated_at if previous.stage == item.stage else item.updated_at
+            )
             if item == previous:
                 return
             self.items = [existing for existing in self.items if existing.id != item.id]
@@ -74,7 +76,9 @@ class SessionHistoryStore:
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary = tempfile.mkstemp(prefix=".pocketpilot-history-", dir=self.path.parent)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=".pocketpilot-history-", dir=self.path.parent
+        )
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                 json.dump([item.model_dump(mode="json") for item in self.items], stream)
