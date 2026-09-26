@@ -10,6 +10,7 @@ This is a **new implementation written during the Hyderabad City Battle event wi
 - `apps/desktop-web` — laptop pairing, workspace setup, and session dashboard
 - `services/agent` — local FastAPI authority for workspace, local Ollama, proposals, tests, and undo
 - `packages/shared-types` — frontend API contract
+- The Android app can capture errors with the camera or screenshot, or dictate notes using an installed offline speech model. Dictation is editable and is never submitted automatically.
 
 The normal development path is `npm install`, then `npm run dev:desktop` and `npm run dev:mobile` in separate terminals. The agent has its own Python environment and startup command in `services/agent/README.md`.
 
@@ -18,6 +19,8 @@ Office Kit is used by the participant to control the laptop from the loaner iQOO
 ## Safety boundary
 
 The phone never receives arbitrary shell access. The laptop agent is the only process allowed to read or modify the selected workspace. Source context is bounded; generated, secret-like, and dependency paths are excluded. Model output is advisory and untrusted. A proposal needs the exact matching approval ID and revision before a file changes.
+
+Voice notes use Android on-device recognition only. If the English offline speech model is missing, Android may ask to download it once; PocketPilot does not fall back to network transcription. Only the transcript is sent to the laptop after the participant reviews it and taps Analyze.
 
 ## Status
 

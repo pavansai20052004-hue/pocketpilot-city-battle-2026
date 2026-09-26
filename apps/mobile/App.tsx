@@ -1,4 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
+import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -21,6 +22,7 @@ import { ErrorImageSource, extractErrorFromImage } from './vision';
 
 const URL_KEY = 'pocketpilot.citybattle.agent-url';
 const TOKEN_KEY = 'pocketpilot.citybattle.token';
+const ANDROID_SPEECH_SERVICE = 'com.google.android.as';
 type Tab = 'home' | 'debug';
 
 const workingStages = new Set<Session['stage']>(['analyzing', 'generating_fix', 'testing']);
@@ -260,7 +262,34 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [networkError, setNetworkError] = useState<string | null>(null);
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
+  const voiceBase = useRef('');
   const polling = useRef(false);
+
+  useSpeechRecognitionEvent('start', () => {
+    setVoiceListening(true);
+    setVoiceStatus('Listening on this phone. Speak your error notes, then tap stop.');
+  });
+  useSpeechRecognitionEvent('end', () => setVoiceListening(false));
+  useSpeechRecognitionEvent('result', event => {
+    const transcript = event.results[0]?.transcript.trim();
+    if (!transcript) return;
+    const base = voiceBase.current;
+    setErrorText(`${base}${base ? '\n' : ''}${transcript}`);
+    if (event.isFinal) setVoiceStatus('Transcript ready. Review or edit it before analysis.');
+  });
+  useSpeechRecognitionEvent('error', event => {
+    setVoiceListening(false);
+    const message = event.error === 'no-speech' || event.error === 'speech-timeout'
+      ? 'No speech detected. Tap the microphone and try again.'
+      : event.error === 'not-allowed'
+        ? 'Microphone access is off. Allow it in Android settings, then try again.'
+        : event.error === 'service-not-allowed' || event.error === 'language-not-supported' || event.error === 'network'
+          ? 'On-device speech recognition is unavailable. Check that the offline English voice model is installed.'
+          : 'Voice input stopped. You can retry or type the error instead.';
+    setVoiceStatus(message);
+  });
 
   useEffect(() => {
     let active = true;
@@ -335,6 +364,73 @@ export default function App() {
     void action('/api/sessions', { error_text: value, source: errorSource });
   }
 
+  async function toggleVoiceInput() {
+    if (voiceListening) {
+      ExpoSpeechRecognitionModule.stop();
+      return;
+    }
+    if (Platform.OS !== 'android') {
+      setVoiceStatus('On-device voice input is available in the Android app. You can type or capture the error here.');
+      return;
+    }
+    setVoiceStatus(null);
+    try {
+      if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
+        setVoiceStatus('Android speech recognition is unavailable. You can type or capture the error instead.');
+        return;
+      }
+      if (!ExpoSpeechRecognitionModule.supportsOnDeviceRecognition()) {
+        setVoiceStatus('This device does not offer on-device speech recognition, so voice input stays off.');
+        return;
+      }
+      const permission = await ExpoSpeechRecognitionModule.requestMicrophonePermissionsAsync();
+      if (!permission.granted) {
+        setVoiceStatus('Microphone access is needed for dictation. Allow it in Android settings, then try again.');
+        return;
+      }
+      if (!ExpoSpeechRecognitionModule.getSpeechRecognitionServices().includes(ANDROID_SPEECH_SERVICE)) {
+        setVoiceStatus('Google on-device speech service is unavailable. You can type or capture the error instead.');
+        return;
+      }
+
+      const supported = await ExpoSpeechRecognitionModule.getSupportedLocales({
+        androidRecognitionServicePackage: ANDROID_SPEECH_SERVICE,
+      });
+      const canonical = (locale: string) => locale.replace('_', '-').toLowerCase();
+      const preferred = ['en-IN', 'en-US'];
+      const locale = preferred.find(candidate => supported.locales.some(item => canonical(item) === candidate.toLowerCase()))
+        ?? supported.locales.find(item => canonical(item).startsWith('en-'));
+      if (!locale) {
+        setVoiceStatus('No offline English voice model is supported on this device. You can type or capture the error instead.');
+        return;
+      }
+      const installed = supported.installedLocales.some(item => canonical(item) === canonical(locale));
+      if (!installed) {
+        const download = await ExpoSpeechRecognitionModule.androidTriggerOfflineModelDownload({ locale });
+        setVoiceStatus(download.status === 'download_success'
+          ? 'Offline voice model downloaded. Tap the microphone again to dictate.'
+          : 'Download the offline voice model in the Android prompt, then tap the microphone again. Speech audio will stay on this phone.');
+        return;
+      }
+
+      voiceBase.current = errorText.trimEnd();
+      ExpoSpeechRecognitionModule.start({
+        lang: locale,
+        interimResults: true,
+        continuous: false,
+        maxAlternatives: 1,
+        requiresOnDeviceRecognition: true,
+        addsPunctuation: true,
+        androidRecognitionServicePackage: ANDROID_SPEECH_SERVICE,
+        contextualStrings: ['PocketPilot', 'TypeError', 'NullPointerException', 'stack trace', 'pytest', 'Java'],
+      });
+    } catch (error) {
+      setVoiceStatus(error instanceof Error
+        ? `Voice input could not start: ${error.message}`
+        : 'Voice input could not start. You can type or capture the error instead.');
+    }
+  }
+
   async function scan(source: ErrorImageSource) {
     setBusy(true); setNotice(null);
     try {
@@ -404,14 +500,18 @@ export default function App() {
           {showComposer ? <Panel>
             <Eyebrow index="01">ERROR INPUT</Eyebrow>
             <View style={styles.captureRow}>
-              <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void scan('camera'); }} style={styles.captureAction}><Text style={styles.captureText}>▣  CAMERA</Text></Pressable>
-              <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void scan('gallery'); }} style={styles.captureAction}><Text style={styles.captureText}>◫  SCREENSHOT</Text></Pressable>
+              <Pressable accessibilityRole="button" disabled={busy || voiceListening} onPress={() => { void scan('camera'); }} style={styles.captureAction}><Text style={styles.captureText}>▣  CAMERA</Text></Pressable>
+              <Pressable accessibilityRole="button" disabled={busy || voiceListening} onPress={() => { void scan('gallery'); }} style={styles.captureAction}><Text style={styles.captureText}>◫  SCREENSHOT</Text></Pressable>
             </View>
             {imageUri && <Image source={{ uri: imageUri }} style={styles.imagePreview} resizeMode="contain" accessibilityLabel="Selected error image preview" />}
             {imageUri && <Text style={styles.fieldHint}>Image stays on this phone. Check and edit the extracted text below; only that text is sent when you tap Analyze.</Text>}
+            <Pressable accessibilityRole="button" accessibilityLabel={voiceListening ? 'Stop voice dictation' : 'Dictate error notes on this device'} disabled={busy} onPress={() => { void toggleVoiceInput(); }} style={[styles.voiceAction, voiceListening && styles.voiceActionActive]}>
+              <Text style={[styles.voiceActionText, voiceListening && styles.voiceActionTextActive]}>{voiceListening ? '■  STOP DICTATION' : '🎙  SPEAK ERROR NOTES'}</Text>
+            </Pressable>
+            <Text style={voiceStatus ? styles.voiceStatus : styles.fieldHint}>{voiceStatus || 'Optional on-device dictation. No speech audio is sent to the laptop.'}</Text>
             <TextInput accessibilityLabel="Error text" placeholder="Paste the error, stack trace, and failing test output…" placeholderTextColor={c.dim} value={errorText} onChangeText={setErrorText} multiline textAlignVertical="top" style={styles.errorInput} />
             <Text style={styles.fieldHint}>Tip: include the source file path and line number for stronger location evidence.</Text>
-            <Button onPress={startAnalysis} disabled={busy || !state?.workspace?.ready} icon="⌁">{busy ? 'READING / SENDING…' : 'ANALYZE ERROR'}</Button>
+            <Button onPress={startAnalysis} disabled={busy || voiceListening || !state?.workspace?.ready} icon="⌁">{busy ? 'READING / SENDING…' : voiceListening ? 'STOP DICTATION TO CONTINUE' : 'ANALYZE ERROR'}</Button>
             {!state?.workspace?.ready && <Text style={styles.cautionText}>Choose a workspace in the desktop dashboard first.</Text>}
           </Panel> : session ? <>
             {workingStages.has(session.stage) && <ProcessingPanel key={session.stage} stage={session.stage} />}
@@ -488,6 +588,11 @@ const styles = StyleSheet.create({
   captureRow: { flexDirection: 'row', gap: 10, marginTop: 18 },
   captureAction: { flex: 1, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: c.line, borderRadius: 12, backgroundColor: c.canvas },
   captureText: { color: c.lime, fontSize: 11, fontWeight: '800', letterSpacing: 0.7 },
+  voiceAction: { minHeight: 50, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: c.lime, borderRadius: 12, backgroundColor: c.canvas, marginTop: 12 },
+  voiceActionActive: { backgroundColor: '#2A1714', borderColor: c.coral },
+  voiceActionText: { color: c.lime, fontSize: 11, fontWeight: '900', letterSpacing: 1 },
+  voiceActionTextActive: { color: c.coral },
+  voiceStatus: { color: c.amber, fontSize: 12, lineHeight: 19, marginTop: 9 },
   imagePreview: { height: 150, width: '100%', borderRadius: 12, backgroundColor: c.canvas, marginTop: 14 },
   processingMain: { flexDirection: 'row', gap: 17, alignItems: 'center', marginTop: 22 },
   orbitBox: { width: 91, height: 91, alignItems: 'center', justifyContent: 'center' },
