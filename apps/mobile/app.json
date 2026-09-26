@@ -3,13 +3,13 @@
     "name": "PocketPilot AI",
     "slug": "pocketpilot-citybattle",
     "scheme": "pocketpilot",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "android": {
       "package": "ai.pocketpilot.citybattle",
-      "versionCode": 4,
+      "versionCode": 5,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#080B0A"
@@ -34,7 +34,7 @@
         {
           "cameraPermission": "PocketPilot uses the camera to read an error on your screen.",
           "photosPermission": "PocketPilot reads only the screenshot you select.",
-          "microphonePermission": false
+          "microphonePermission": "PocketPilot uses your microphone to dictate error notes on this device."
         }
       ],
       [
