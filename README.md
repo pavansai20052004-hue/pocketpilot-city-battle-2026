@@ -24,4 +24,6 @@ Voice notes use Android on-device recognition only. If the English offline speec
 
 ## Status
 
-This repository is being built incrementally during the event. A green build and a physical-phone end-to-end check are required before a feature is described as verified.
+The core loop was verified on the loaner iQOO on 26 September 2026 with Android build 1.0.4. The phone paired to the laptop agent, the submitted error resolved to `pricing.py:2` with high confidence, and the model proposed a one-file change. After phone approval, the agent ran `python -m pytest -q` and reported **2 passed**. Undo then restored the original `pricing.py`; the agent's final session stage was `undone`. The participant also confirmed that microphone input was available in the corrected Android build.
+
+This proves the bounded Python demo path, not arbitrary-project repair. Camera OCR recovery still needs another physical-phone check; automatic verification currently supports the Python and Maven project types described in the [agent documentation](services/agent/README.md).
