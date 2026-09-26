@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -16,6 +17,7 @@ import {
 } from 'react-native';
 import { AgentState, PairResult, Session, normalizeAgentAddress, request } from './api';
 import { palette as c } from './theme';
+import { ErrorImageSource, extractErrorFromImage } from './vision';
 
 const URL_KEY = 'pocketpilot.citybattle.agent-url';
 const TOKEN_KEY = 'pocketpilot.citybattle.token';
@@ -252,6 +254,8 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [tab, setTab] = useState<Tab>('home');
   const [errorText, setErrorText] = useState('');
+  const [errorSource, setErrorSource] = useState<'text' | ErrorImageSource>('text');
+  const [imageUri, setImageUri] = useState<string | null>(null);
   const [composeNew, setComposeNew] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -326,7 +330,22 @@ export default function App() {
   function startAnalysis() {
     const value = errorText.trim();
     if (value.length < 12) { setNotice('Paste the error and a few stack-trace lines before analyzing.'); return; }
-    void action('/api/sessions', { error_text: value, source: 'text' });
+    void action('/api/sessions', { error_text: value, source: errorSource });
+  }
+
+  async function scan(source: ErrorImageSource) {
+    setBusy(true); setNotice(null);
+    try {
+      const extracted = await extractErrorFromImage(source);
+      if (!extracted) return;
+      setErrorText(extracted.text);
+      setErrorSource(extracted.source);
+      setImageUri(extracted.imageUri);
+      setComposeNew(true);
+      setTab('debug');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'On-device text recognition failed. You can paste the error instead.');
+    } finally { setBusy(false); }
   }
 
   const session = state?.session;
@@ -365,6 +384,13 @@ export default function App() {
             <Text style={styles.fieldHint}>{state?.workspace?.ready ? 'The desktop agent has a project selected and can inspect its source safely.' : 'Select a project in the laptop dashboard before analyzing an error.'}</Text>
             <Button onPress={() => setTab('debug')} icon="↗">{session ? 'OPEN LIVE SESSION' : 'START DEBUGGING'}</Button>
           </Panel>
+          <Panel>
+            <Eyebrow index="01">SEE IT / ON-DEVICE OCR</Eyebrow>
+            <Text style={styles.proposalTitle}>Capture the error.</Text>
+            <Text style={styles.body}>Photograph a screen or choose a screenshot. Read the extracted text on this phone before sending anything to the laptop.</Text>
+            <View style={styles.sectionTop}><Button onPress={() => { void scan('camera'); }} disabled={busy} icon="▣">SCAN WITH CAMERA</Button></View>
+            <Button onPress={() => { void scan('gallery'); }} disabled={busy} tone="secondary">CHOOSE SCREENSHOT</Button>
+          </Panel>
           <View style={styles.sectionTop}><Eyebrow index="HOW / 02">ONE CONTROLLED LOOP</Eyebrow></View>
           <View style={styles.howRow}><Text style={styles.howNumber}>01</Text><View><Text style={styles.howTitle}>Capture the failure</Text><Text style={styles.howBody}>Paste the error on your phone.</Text></View></View>
           <View style={styles.howRow}><Text style={styles.howNumber}>02</Text><View><Text style={styles.howTitle}>Inspect the evidence</Text><Text style={styles.howBody}>Local AI explains the likely source.</Text></View></View>
@@ -372,12 +398,18 @@ export default function App() {
         </> : <>
           <Eyebrow index="LIVE / 02">VISION DEBUGGER</Eyebrow>
           <Text style={styles.pageTitle}>{showComposer ? 'Show us the failure.' : session?.stage === 'verified' ? 'A fix, proven.' : session?.stage === 'undone' ? 'Back to the baseline.' : 'Follow the signal.'}</Text>
-          <Text style={styles.pageSubtitle}>{showComposer ? 'Paste a stack trace or failing test output below.' : 'One bounded session. Every decision visible.'}</Text>
+          <Text style={styles.pageSubtitle}>{showComposer ? 'Scan an error or paste a stack trace. Review the text before analysis.' : 'One bounded session. Every decision visible.'}</Text>
           {showComposer ? <Panel>
             <Eyebrow index="01">ERROR INPUT</Eyebrow>
+            <View style={styles.captureRow}>
+              <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void scan('camera'); }} style={styles.captureAction}><Text style={styles.captureText}>▣  CAMERA</Text></Pressable>
+              <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void scan('gallery'); }} style={styles.captureAction}><Text style={styles.captureText}>◫  SCREENSHOT</Text></Pressable>
+            </View>
+            {imageUri && <Image source={{ uri: imageUri }} style={styles.imagePreview} resizeMode="contain" accessibilityLabel="Selected error image preview" />}
+            {imageUri && <Text style={styles.fieldHint}>Image stays on this phone. Check and edit the extracted text below; only that text is sent when you tap Analyze.</Text>}
             <TextInput accessibilityLabel="Error text" placeholder="Paste the error, stack trace, and failing test output…" placeholderTextColor={c.dim} value={errorText} onChangeText={setErrorText} multiline textAlignVertical="top" style={styles.errorInput} />
             <Text style={styles.fieldHint}>Tip: include the source file path and line number for stronger location evidence.</Text>
-            <Button onPress={startAnalysis} disabled={busy || !state?.workspace?.ready} icon="⌁">{busy ? 'SENDING…' : 'ANALYZE ERROR'}</Button>
+            <Button onPress={startAnalysis} disabled={busy || !state?.workspace?.ready} icon="⌁">{busy ? 'READING / SENDING…' : 'ANALYZE ERROR'}</Button>
             {!state?.workspace?.ready && <Text style={styles.cautionText}>Choose a workspace in the desktop dashboard first.</Text>}
           </Panel> : session ? <>
             {workingStages.has(session.stage) && <ProcessingPanel key={session.stage} stage={session.stage} />}
@@ -451,6 +483,10 @@ const styles = StyleSheet.create({
   howTitle: { color: c.ink, fontSize: 16, fontWeight: '700' },
   howBody: { color: c.dim, fontSize: 12, marginTop: 5 },
   errorInput: { minHeight: 220, backgroundColor: c.canvas, color: c.ink, borderColor: c.line, borderWidth: 1, borderRadius: 14, padding: 15, fontFamily: 'monospace', fontSize: 13, lineHeight: 21, marginTop: 18 },
+  captureRow: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  captureAction: { flex: 1, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: c.line, borderRadius: 12, backgroundColor: c.canvas },
+  captureText: { color: c.lime, fontSize: 11, fontWeight: '800', letterSpacing: 0.7 },
+  imagePreview: { height: 150, width: '100%', borderRadius: 12, backgroundColor: c.canvas, marginTop: 14 },
   processingMain: { flexDirection: 'row', gap: 17, alignItems: 'center', marginTop: 22 },
   orbitBox: { width: 91, height: 91, alignItems: 'center', justifyContent: 'center' },
   orbitInner: { width: 68, height: 68, borderRadius: 34, borderWidth: 7, borderColor: c.lime, alignItems: 'center', justifyContent: 'center' },
