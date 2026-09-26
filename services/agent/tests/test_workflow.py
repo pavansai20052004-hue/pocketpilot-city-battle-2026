@@ -503,6 +503,22 @@ def test_ocr_match_stays_strict_for_unknown_or_unlined_files(tmp_path):
     assert workspace.locate("test_user_service. py:4: TypeError") is None
 
 
+def test_ocr_dash_for_extension_resolves_only_indexed_source(tmp_path):
+    (tmp_path / "user.js").write_text(
+        "export function displayName(user) {\n  return user.name;\n}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "user.test.js").write_text("export const expected = 'Guest';\n")
+    workspace = Workspace(str(tmp_path))
+
+    match = workspace.locate("at displayName (user-js:2:15)")
+    assert match is not None
+    assert (match.path, match.line) == ("user.js", 2)
+    assert workspace.locate("at displayName (misuser-js:2:15)") is None
+    assert workspace.locate("user.test-js:1: failure") is None
+    assert workspace.locate("user-js:0: failure") is None
+
+
 def test_ocr_session_gets_grounded_high_confidence(tmp_path, client):
     folder = project(tmp_path)
     assert client.post("/api/workspace", json={"path": str(folder)}).status_code == 200

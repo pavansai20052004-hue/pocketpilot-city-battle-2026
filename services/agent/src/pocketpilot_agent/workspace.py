@@ -35,17 +35,18 @@ SKIP_PARTS = {
 MAX_SOURCE_BYTES = 80_000
 MAX_FILES = 600
 MAX_DEPTH = 12
-# OCR often inserts a space around the extension dot ("pricing. py:2").
-# Require an explicit line number and still resolve only against indexed files.
+# OCR can insert spaces around an extension dot ("pricing. py:2") or read it
+# as a dash ("pricing-py:2"). An explicit line and unique indexed source are
+# still required before the location can be trusted.
 STACK_PATH = re.compile(
     r"(?<![A-Za-z0-9_./\\-])((?:[A-Za-z]:[\\/])?[A-Za-z0-9_./\\ -]+?)[ \t]*"
-    r"\.[ \t]*(py|java|ts|tsx|js|jsx|cs)[ \t]*:[ \t]*(\d+)\b",
+    r"[.\-][ \t]*(py|java|ts|tsx|js|jsx|cs)[ \t]*:[ \t]*(\d+)\b",
     re.IGNORECASE,
 )
 # JavaScript/TypeScript and .NET compilers commonly report file(line,column).
 PARENTHESIZED_LOCATION = re.compile(
     r"(?<![A-Za-z0-9_./\\-])((?:[A-Za-z]:[\\/])?[A-Za-z0-9_./\\ -]+?)[ \t]*"
-    r"\.[ \t]*(py|java|ts|tsx|js|jsx|cs)[ \t]*\([ \t]*(\d+)"
+    r"[.\-][ \t]*(py|java|ts|tsx|js|jsx|cs)[ \t]*\([ \t]*(\d+)"
     r"(?:[ \t]*,[ \t]*\d+)?[ \t]*\)",
     re.IGNORECASE,
 )
