@@ -409,8 +409,6 @@ class Workspace:
                 continue
             path_terms = _identifier_terms(Path(path).stem)
             path_overlap = query_terms & path_terms
-            if not path_overlap:
-                continue
             path_parts = path.split("/")
             common_depth = 0
             for left, right in zip(target_parts[:-1], path_parts[:-1]):

@@ -475,7 +475,7 @@ def test_context_chunker_is_bounded_redacted_and_reports_absolute_ranges(tmp_pat
         "    BigDecimal discountedPrice(BigDecimal price, Integer discountPercent) {"
     )
     related_lines[125] = '        String api_key = "related-fixture-marker";'
-    (source_dir / "PriceDiscountPolicy.java").write_text("\n".join(related_lines), encoding="utf-8")
+    (source_dir / "PricingRules.java").write_text("\n".join(related_lines), encoding="utf-8")
     test_lines = ["package demo;"] + ["// test context"] * 25
     test_lines[15] = "    assertEquals(price, service.finalPrice(price, null));"
     (test_dir / "PriceServiceTest.java").write_text("\n".join(test_lines), encoding="utf-8")
@@ -496,12 +496,13 @@ def test_context_chunker_is_bounded_redacted_and_reports_absolute_ranges(tmp_pat
     assert [(item.role, item.path) for item in sources] == [
         ("target", "src/main/java/demo/PriceService.java"),
         ("test", "src/test/java/demo/PriceServiceTest.java"),
-        ("related", "src/main/java/demo/PriceDiscountPolicy.java"),
+        ("related", "src/main/java/demo/PricingRules.java"),
     ]
     target_source, test_source, related_source = sources
     assert target_source.start_line <= 150 <= target_source.end_line
     assert test_source.start_line <= 16 <= test_source.end_line
     assert related_source.start_line <= 125 <= related_source.end_line
+    assert "discountedPrice" in context
     assert "fixture-marker-not-secret" not in context
     assert "related-fixture-marker" not in context
     assert "[sensitive line omitted]" in context
