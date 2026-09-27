@@ -3,16 +3,16 @@
     "name": "PocketPilot AI",
     "slug": "pocketpilot-citybattle",
     "scheme": "pocketpilot",
-    "version": "1.0.6",
+    "version": "1.0.9",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "android": {
       "package": "ai.pocketpilot.citybattle",
-      "versionCode": 7,
+      "versionCode": 10,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
-        "backgroundColor": "#080B0A"
+        "backgroundColor": "#09131E"
       }
     },
     "web": {
@@ -34,14 +34,14 @@
         {
           "cameraPermission": "PocketPilot uses the camera to read an error on your screen.",
           "photosPermission": "PocketPilot reads only the screenshot you select.",
-          "microphonePermission": "PocketPilot uses your microphone to dictate error notes on this device."
+          "microphonePermission": "PocketPilot uses the microphone for on-device error dictation and voice questions."
         }
       ],
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "PocketPilot uses your microphone to transcribe error notes on this device.",
-          "speechRecognitionPermission": "PocketPilot uses speech recognition to transcribe error notes on this device.",
+          "microphonePermission": "PocketPilot uses the microphone for on-device error dictation and voice questions.",
+          "speechRecognitionPermission": "PocketPilot transcribes error notes and voice questions on this device.",
           "androidSpeechServicePackages": ["com.google.android.as"]
         }
       ],

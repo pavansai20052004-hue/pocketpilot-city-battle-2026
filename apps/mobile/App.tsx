@@ -1,4 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
+import * as Speech from 'expo-speech';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -18,14 +19,15 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { AgentState, PairResult, Session, SessionHistoryItem, normalizeAgentAddress, request } from './api';
+import { AgentState, AssistantResponse, AssistantTurn, PairResult, Session, SessionHistoryItem, normalizeAgentAddress, request } from './api';
+import { PilotPanel } from './PilotPanel';
 import { palette as c } from './theme';
 import { ErrorImageSource, extractErrorFromImage } from './vision';
 
 const URL_KEY = 'pocketpilot.citybattle.agent-url';
 const TOKEN_KEY = 'pocketpilot.citybattle.token';
 const ANDROID_SPEECH_SERVICE = 'com.google.android.as';
-type Tab = 'home' | 'debug' | 'sessions' | 'settings';
+type Tab = 'home' | 'debug' | 'pilot' | 'sessions' | 'settings';
 
 const workingStages = new Set<Session['stage']>(['analyzing', 'generating_fix', 'testing']);
 
@@ -331,7 +333,7 @@ function SettingsPanel({
       <Eyebrow index="01">LAPTOP AGENT</Eyebrow>
       <View style={styles.metricRow}>
         <Metric value={connected ? 'LINKED' : agentUrl ? 'OFFLINE' : 'NOT PAIRED'} label="CONNECTION" />
-        <Metric value={state?.provider?.ready ? 'READY' : 'UNAVAILABLE'} label="LOCAL MODEL" />
+        <Metric value={state?.provider?.ready ? 'READY' : 'UNAVAILABLE'} label={state?.provider?.name === 'openrouter' ? 'OPENROUTER CLOUD' : 'OLLAMA LOCAL'} />
       </View>
       <Text style={styles.settingsLabel}>AGENT ADDRESS</Text>
       <Text selectable style={styles.settingsValue}>{agentUrl || 'Pair from the welcome screen'}</Text>
@@ -344,15 +346,18 @@ function SettingsPanel({
       </>}
     </Panel>
     <Panel>
-      <Eyebrow index="02">PRIVATE BY DEFAULT</Eyebrow>
+      <Eyebrow index="02">AI DATA ROUTING</Eyebrow>
       <View style={styles.settingsRow}><Text style={styles.settingsRowTitle}>Image capture</Text><Text style={styles.settingsRowBody}>OCR runs on this phone. Images stay here; only reviewed text is sent when you analyze.</Text></View>
-      <View style={styles.settingsRow}><Text style={styles.settingsRowTitle}>Voice notes</Text><Text style={styles.settingsRowBody}>Speech is transcribed on this device. PocketPilot sends the transcript only after you choose Analyze.</Text></View>
+      <View style={styles.settingsRow}><Text style={styles.settingsRowTitle}>Voice notes</Text><Text style={styles.settingsRowBody}>Speech is transcribed on this device. Error notes stay in the editor until Analyze; a Pilot question is sent after you stop speaking.</Text></View>
+      <View style={styles.settingsRow}><Text style={styles.settingsRowTitle}>{state?.provider?.name === 'openrouter' ? 'OpenRouter cloud is active' : 'Ollama local is active'}</Text><Text style={styles.settingsRowBody}>{state?.provider?.name === 'openrouter' ? 'All model calls send reviewed error text, a bounded matched source-file window, fix instructions, and Pilot messages from the laptop to OpenRouter. Common secret patterns are redacted, but this cannot guarantee every secret is removed. Do not send credentials or code you are not authorized to share.' : 'Analysis, fix proposals, and Pilot conversation use Ollama on the paired laptop. Those prompts stay local. Avoid including credentials in submitted text.'} Up to eight recent Pilot messages stay in laptop memory only and are cleared on request, session change, unpair, or agent restart.</Text></View>
+      {state?.provider?.name === 'openrouter' && <Text style={styles.cautionText}>CLOUD AI ACTIVE · Your selected error and matched code leave this laptop for every AI request.</Text>}
+      <Text style={styles.fieldHint}>The phone-to-laptop bridge uses HTTP. Pair only on a Wi-Fi network you trust and unpair when finished.</Text>
       <View style={styles.settingsRow}><Text style={styles.settingsRowTitle}>Code changes</Text><Text style={styles.settingsRowBody}>The laptop shows a bounded diff. No file changes until you approve it; undo checks that the file has not changed since.</Text></View>
       <Text style={styles.fieldHint}>Session history stores short outcomes only—not raw error text, source code, diffs, or test output.</Text>
     </Panel>
     <Panel>
       <Eyebrow index="03">DEVICE PERMISSIONS</Eyebrow>
-      <Text style={styles.body}>Camera access is used to capture an error screen. Microphone access is used only for on-device dictation; typing and screenshots remain available if either permission is off.</Text>
+      <Text style={styles.body}>Camera access captures an error screen. Microphone access is used for on-device dictation and Pilot voice questions; typing and screenshots remain available if permission is off.</Text>
       <View style={styles.sectionTop}><Button onPress={onOpenDeviceSettings} tone="secondary">OPEN ANDROID APP SETTINGS</Button></View>
     </Panel>
   </>;
@@ -375,21 +380,50 @@ export default function App() {
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [voiceListening, setVoiceListening] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
+  const [chatTurns, setChatTurns] = useState<AssistantTurn[]>([]);
+  const [chatDraft, setChatDraft] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [readAloud, setReadAloud] = useState(true);
   const [publishMessage, setPublishMessage] = useState('');
   const voiceBase = useRef('');
+  const voiceTarget = useRef<'error' | 'pilot'>('error');
+  const pendingChatVoice = useRef<string | null>(null);
+  const chatContextId = useRef<string | null>(null);
+  const chatOwnerToken = useRef<string | null>(null);
+  const chatRequestGeneration = useRef(0);
+  const chatInFlightGeneration = useRef<number | null>(null);
   const polling = useRef(false);
 
   useSpeechRecognitionEvent('start', () => {
     setVoiceListening(true);
-    setVoiceStatus('Listening on this phone. Speak your error notes, then tap stop.');
+    setVoiceStatus(voiceTarget.current === 'pilot'
+      ? 'Listening on this phone. Ask Pilot a question.'
+      : 'Listening on this phone. Speak your error notes, then tap stop.');
   });
-  useSpeechRecognitionEvent('end', () => setVoiceListening(false));
+  useSpeechRecognitionEvent('end', () => {
+    setVoiceListening(false);
+    if (voiceTarget.current === 'pilot' && pendingChatVoice.current) {
+      const question = pendingChatVoice.current;
+      pendingChatVoice.current = null;
+      void sendChat(question);
+    }
+  });
   useSpeechRecognitionEvent('result', event => {
     const transcript = event.results[0]?.transcript.trim();
     if (!transcript) return;
     const base = voiceBase.current;
-    setErrorText(`${base}${base ? '\n' : ''}${transcript}`);
-    if (event.isFinal) setVoiceStatus('Transcript ready. Review or edit it before analysis.');
+    if (voiceTarget.current === 'pilot') {
+      const question = `${base}${base ? ' ' : ''}${transcript}`;
+      setChatDraft(question);
+      if (event.isFinal) {
+        pendingChatVoice.current = question;
+        setVoiceStatus(`Question heard. Sending it to ${state?.provider?.name === 'openrouter' ? 'OpenRouter' : 'local Ollama'}…`);
+      }
+    } else {
+      setErrorText(`${base}${base ? '\n' : ''}${transcript}`);
+      if (event.isFinal) setVoiceStatus('Transcript ready. Review or edit it before analysis.');
+    }
   });
   useSpeechRecognitionEvent('error', event => {
     setVoiceListening(false);
@@ -449,6 +483,23 @@ export default function App() {
     );
   }, [state?.session?.id]);
 
+  useEffect(() => {
+    const id = state?.session?.id ?? null;
+    const phoneChanged = chatOwnerToken.current !== token;
+    const sessionChanged = chatContextId.current !== id;
+    if (phoneChanged || sessionChanged) {
+      chatRequestGeneration.current += 1;
+      chatContextId.current = id;
+      chatOwnerToken.current = token;
+      setChatTurns([]);
+      // Do not leave a previous session's hidden short-term context attached
+      // to the paired phone when the app is reopened or a new session starts.
+      if (agentUrl && token) {
+        void request(agentUrl, '/api/assistant/clear', token, {}).catch(() => undefined);
+      }
+    }
+  }, [agentUrl, state?.session?.id, token]);
+
   async function pair() {
     setBusy(true); setNotice(null);
     try {
@@ -464,6 +515,9 @@ export default function App() {
   }
 
   async function disconnect() {
+    chatRequestGeneration.current += 1;
+    chatInFlightGeneration.current = null;
+    setChatBusy(false);
     let revoked = false;
     if (agentUrl && token) {
       try {
@@ -475,6 +529,8 @@ export default function App() {
     }
     await clearPairing();
     setToken(null); setAgentUrl(null); setState(null); setConnected(false); setTab('home'); setNetworkError(null);
+    setChatTurns([]); setChatDraft('');
+    void Speech.stop();
     setNotice(revoked ? 'Phone unpaired. Its laptop token has been revoked.' : 'Phone link cleared here. The laptop token will expire within 36 hours if the laptop was offline.');
   }
 
@@ -534,11 +590,74 @@ export default function App() {
     void action('/api/sessions', { error_text: value, source: errorSource });
   }
 
-  async function toggleVoiceInput() {
+  function speakReply(reply: string) {
+    const spoken = reply.replace(/[`*_#]/g, '').slice(0, Math.min(Speech.maxSpeechInputLength || 1200, 1200));
+    void Speech.stop().then(() => Speech.speak(spoken, { language: 'en-IN', rate: 0.96 })).catch(() => {
+      setChatError('The text reply is ready, but this device could not play it aloud.');
+    });
+  }
+
+  async function sendChat(message?: string) {
+    const question = (message ?? chatDraft).trim();
+    if (!question || !agentUrl || !token || chatBusy) return;
+    const fromDraft = message === undefined;
+    if (question.length > 1200) {
+      setChatDraft(question.slice(0, 1200));
+      setChatError('Pilot questions are limited to 1,200 characters. The transcript has been shortened for review.');
+      return;
+    }
+    setChatBusy(true); setChatError(null);
+    const requestGeneration = ++chatRequestGeneration.current;
+    chatInFlightGeneration.current = requestGeneration;
+    if (fromDraft) setChatDraft('');
+    try {
+      const answer = await request<AssistantResponse>(agentUrl, '/api/assistant/chat', token, {
+        message: question,
+        session_id: state?.session?.id ?? null,
+      }, 190000);
+      if (requestGeneration !== chatRequestGeneration.current) return;
+      setChatTurns(previous => [...previous, { role: 'user', content: question }, { role: 'assistant', content: answer.reply }].slice(-8) as AssistantTurn[]);
+      setChatDraft('');
+      setVoiceStatus(null);
+      if (readAloud) speakReply(answer.reply);
+    } catch (error) {
+      if (requestGeneration !== chatRequestGeneration.current) return;
+      setChatError(error instanceof Error ? error.message : 'Pilot could not answer. Try again.');
+      if (fromDraft) setChatDraft(question);
+    } finally {
+      if (chatInFlightGeneration.current === requestGeneration) {
+        chatInFlightGeneration.current = null;
+        setChatBusy(false);
+      }
+    }
+  }
+
+  async function clearChat() {
+    if (!agentUrl || !token || voiceListening) return;
+    chatRequestGeneration.current += 1;
+    setChatError(null);
+    try {
+      await request<{ cleared: boolean }>(agentUrl, '/api/assistant/clear', token, {});
+      setChatTurns([]);
+      setChatDraft('');
+      setVoiceStatus(null);
+      pendingChatVoice.current = null;
+      void Speech.stop();
+    } catch (error) {
+      setChatError(error instanceof Error
+        ? `Chat could not be cleared on the laptop: ${error.message}`
+        : 'Chat could not be cleared on the laptop. Check the connection and retry.');
+    }
+  }
+
+  async function toggleVoiceInput(target: 'error' | 'pilot' = 'error') {
     if (voiceListening) {
       ExpoSpeechRecognitionModule.stop();
       return;
     }
+    voiceTarget.current = target;
+    pendingChatVoice.current = null;
+    if (target === 'pilot') void Speech.stop();
     if (Platform.OS !== 'android') {
       setVoiceStatus('On-device voice input is available in the Android app. You can type or capture the error here.');
       return;
@@ -583,7 +702,7 @@ export default function App() {
         return;
       }
 
-      voiceBase.current = errorText.trimEnd();
+      voiceBase.current = target === 'pilot' ? chatDraft.trimEnd() : errorText.trimEnd();
       ExpoSpeechRecognitionModule.start({
         lang: locale,
         interimResults: true,
@@ -644,7 +763,7 @@ export default function App() {
         </> : tab === 'home' ? <>
           <Eyebrow index="LIVE / 01">FIELD INSTRUMENT</Eyebrow>
           <Text style={styles.heroTitle}>The desk, in your hand<Text style={{ color: c.lime }}>.</Text></Text>
-          <Text style={styles.heroBody}>Your phone directs the fix. Your laptop keeps the code and local model.</Text>
+          <Text style={styles.heroBody}>Your phone directs the fix. Your laptop keeps the code and selected AI route.</Text>
           <Panel accent>
             <Eyebrow index="↗">YOUR WORKSPACE</Eyebrow>
             <Text style={styles.workspaceName}>{state?.workspace?.path || 'No project selected'}</Text>
@@ -653,7 +772,13 @@ export default function App() {
             <Button onPress={() => setTab('debug')} icon="↗">{session ? 'OPEN LIVE SESSION' : 'START DEBUGGING'}</Button>
           </Panel>
           <Panel>
-            <Eyebrow index="01">SEE IT / ON-DEVICE OCR</Eyebrow>
+            <Eyebrow index="02">PILOT / CONVERSATION</Eyebrow>
+            <Text style={styles.proposalTitle}>Ask the model why.</Text>
+            <Text style={styles.body}>Speak or type a follow-up. Pilot uses the current session evidence to explain the failure and the safest next step; it never applies a fix for you.</Text>
+            <View style={styles.sectionTop}><Button onPress={() => setTab('pilot')} tone="secondary" icon="✳">TALK TO PILOT</Button></View>
+          </Panel>
+          <Panel>
+            <Eyebrow index="03">SEE IT / ON-DEVICE OCR</Eyebrow>
             <Text style={styles.proposalTitle}>Capture the error.</Text>
             <Text style={styles.body}>Photograph a screen or choose a screenshot. Read the extracted text on this phone before sending anything to the laptop.</Text>
             <View style={styles.sectionTop}><Button onPress={() => { void scan('camera'); }} disabled={busy} icon="▣">SCAN WITH CAMERA</Button></View>
@@ -661,14 +786,32 @@ export default function App() {
           </Panel>
           <View style={styles.sectionTop}><Eyebrow index="HOW / 02">ONE CONTROLLED LOOP</Eyebrow></View>
           <View style={styles.howRow}><Text style={styles.howNumber}>01</Text><View><Text style={styles.howTitle}>Capture the failure</Text><Text style={styles.howBody}>Paste the error on your phone.</Text></View></View>
-          <View style={styles.howRow}><Text style={styles.howNumber}>02</Text><View><Text style={styles.howTitle}>Inspect the evidence</Text><Text style={styles.howBody}>Local AI explains the likely source.</Text></View></View>
+          <View style={styles.howRow}><Text style={styles.howNumber}>02</Text><View><Text style={styles.howTitle}>Inspect the evidence</Text><Text style={styles.howBody}>The selected AI provider explains the likely source.</Text></View></View>
           <View style={styles.howRow}><Text style={styles.howNumber}>03</Text><View><Text style={styles.howTitle}>Approve, test, undo</Text><Text style={styles.howBody}>You stay in control of every write.</Text></View></View>
-        </> : tab === 'sessions' ? <HistoryPanel items={state?.history ?? []} historyError={state?.history_error} /> : tab === 'settings' ? <SettingsPanel connected={connected} agentUrl={agentUrl} state={state} onForgetPairing={() => { void disconnect(); }} onOpenDeviceSettings={() => { void openDeviceSettings(); }} /> : <>
+        </> : tab === 'pilot' ? <PilotPanel
+          turns={chatTurns}
+          draft={chatDraft}
+          onDraft={setChatDraft}
+          onSend={(message) => { void sendChat(message); }}
+          onClear={() => { void clearChat(); }}
+          onVoice={() => { void toggleVoiceInput('pilot'); }}
+          onSpeak={speakReply}
+          onToggleReadAloud={() => { setReadAloud(value => !value); void Speech.stop(); }}
+          busy={chatBusy}
+          connected={connected}
+          listening={voiceListening}
+          voiceStatus={voiceTarget.current === 'pilot' ? voiceStatus : null}
+          error={chatError}
+          readAloud={readAloud}
+          session={state?.session ?? null}
+          model={state?.provider?.ready ? state.provider.model : null}
+        /> : tab === 'sessions' ? <HistoryPanel items={state?.history ?? []} historyError={state?.history_error} /> : tab === 'settings' ? <SettingsPanel connected={connected} agentUrl={agentUrl} state={state} onForgetPairing={() => { void disconnect(); }} onOpenDeviceSettings={() => { void openDeviceSettings(); }} /> : <>
           <Eyebrow index="LIVE / 02">VISION DEBUGGER</Eyebrow>
           <Text style={styles.pageTitle}>{showComposer ? 'Show us the failure.' : session?.stage === 'verified' ? 'A fix, proven.' : session?.stage === 'undone' ? 'Back to the baseline.' : 'Follow the signal.'}</Text>
           <Text style={styles.pageSubtitle}>{showComposer ? 'Scan an error or paste a stack trace. Review the text before analysis.' : 'One bounded session. Every decision visible.'}</Text>
           {showComposer ? <Panel>
             <Eyebrow index="01">ERROR INPUT</Eyebrow>
+            {state?.provider?.name === 'openrouter' && <Text style={styles.cautionText}>OPENROUTER CLOUD ACTIVE · ANALYZE sends the reviewed error and matched source context to the cloud. Remove secrets first.</Text>}
             <View style={styles.captureRow}>
               <Pressable accessibilityRole="button" disabled={busy || voiceListening} onPress={() => { void scan('camera'); }} style={styles.captureAction}><Text style={styles.captureText}>▣  CAMERA</Text></Pressable>
               <Pressable accessibilityRole="button" disabled={busy || voiceListening} onPress={() => { void scan('gallery'); }} style={styles.captureAction}><Text style={styles.captureText}>◫  SCREENSHOT</Text></Pressable>
@@ -700,6 +843,7 @@ export default function App() {
     {token && <View style={styles.tabBar}>
       <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === 'home' }} onPress={() => setTab('home')} style={styles.tab}><Text style={[styles.tabIcon, tab === 'home' && styles.activeTab]}>⌂</Text><Text style={[styles.tabLabel, tab === 'home' && styles.activeTab]}>HOME</Text></Pressable>
       <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === 'debug' }} onPress={() => setTab('debug')} style={styles.tab}><Text style={[styles.tabIcon, tab === 'debug' && styles.activeTab]}>⌘</Text><Text style={[styles.tabLabel, tab === 'debug' && styles.activeTab]}>DEBUG</Text></Pressable>
+      <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === 'pilot' }} onPress={() => setTab('pilot')} style={styles.tab}><Text style={[styles.tabIcon, tab === 'pilot' && styles.activeTab]}>✳</Text><Text style={[styles.tabLabel, tab === 'pilot' && styles.activeTab]}>PILOT</Text></Pressable>
       <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === 'sessions' }} onPress={() => setTab('sessions')} style={styles.tab}><Text style={[styles.tabIcon, tab === 'sessions' && styles.activeTab]}>≡</Text><Text style={[styles.tabLabel, tab === 'sessions' && styles.activeTab]}>SESSIONS</Text></Pressable>
       <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === 'settings' }} onPress={() => setTab('settings')} style={styles.tab}><Text style={[styles.tabIcon, tab === 'settings' && styles.activeTab]}>⚙</Text><Text style={[styles.tabLabel, tab === 'settings' && styles.activeTab]}>SETTINGS</Text></Pressable>
     </View>}
@@ -727,7 +871,7 @@ const styles = StyleSheet.create({
   pageTitle: { color: c.ink, fontSize: 36, lineHeight: 41, letterSpacing: -1.5, fontWeight: '800', marginTop: 14 },
   pageSubtitle: { color: c.quiet, fontSize: 14, lineHeight: 22, marginTop: 9, marginBottom: 24 },
   panel: { backgroundColor: c.raised, borderWidth: 1, borderColor: c.line, borderRadius: 24, padding: 20, marginBottom: 18 },
-  panelAccent: { backgroundColor: '#111A10', borderColor: '#4D6530' },
+  panelAccent: { backgroundColor: '#132B3D', borderColor: '#526A72' },
   fieldLabel: { color: c.quiet, fontSize: 10, fontWeight: '800', letterSpacing: 1.7, marginTop: 25, marginBottom: 10 },
   input: { minHeight: 56, borderRadius: 12, borderWidth: 1, borderColor: c.line, backgroundColor: c.canvas, color: c.ink, paddingHorizontal: 16, fontSize: 17 },
   fieldHint: { color: c.dim, fontSize: 12, lineHeight: 18, marginTop: 10, marginBottom: 14 },
@@ -743,7 +887,7 @@ const styles = StyleSheet.create({
   privacyLine: { flexDirection: 'row', gap: 9, alignItems: 'center', marginTop: 10 },
   privacyDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: c.teal },
   privacyText: { color: c.dim, fontSize: 9, letterSpacing: 1.1, fontWeight: '700' },
-  notice: { backgroundColor: '#2A1714', borderColor: '#754338', borderWidth: 1, borderRadius: 18, padding: 18, marginBottom: 20 },
+  notice: { backgroundColor: '#322326', borderColor: '#80515A', borderWidth: 1, borderRadius: 18, padding: 18, marginBottom: 20 },
   noticeHeading: { color: c.coral, fontSize: 10, fontWeight: '900', letterSpacing: 1.6 },
   noticeBody: { color: c.ink, lineHeight: 21, marginTop: 10 },
   noticeRetry: { color: c.amber, fontWeight: '800', letterSpacing: 1.2, fontSize: 11, marginTop: 16 },
@@ -766,7 +910,7 @@ const styles = StyleSheet.create({
   captureAction: { flex: 1, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: c.line, borderRadius: 12, backgroundColor: c.canvas },
   captureText: { color: c.lime, fontSize: 11, fontWeight: '800', letterSpacing: 0.7 },
   voiceAction: { minHeight: 50, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: c.lime, borderRadius: 12, backgroundColor: c.canvas, marginTop: 12 },
-  voiceActionActive: { backgroundColor: '#2A1714', borderColor: c.coral },
+  voiceActionActive: { backgroundColor: '#322326', borderColor: c.coral },
   voiceActionText: { color: c.lime, fontSize: 11, fontWeight: '900', letterSpacing: 1 },
   voiceActionTextActive: { color: c.coral },
   voiceStatus: { color: c.amber, fontSize: 12, lineHeight: 19, marginTop: 9 },
@@ -775,7 +919,7 @@ const styles = StyleSheet.create({
   orbitBox: { width: 91, height: 91, alignItems: 'center', justifyContent: 'center' },
   orbitInner: { width: 68, height: 68, borderRadius: 34, borderWidth: 7, borderColor: c.lime, alignItems: 'center', justifyContent: 'center' },
   orbitCenter: { color: c.lime, fontSize: 18 },
-  orbitTrack: { position: 'absolute', width: 91, height: 91, borderRadius: 46, borderWidth: 1, borderColor: '#718A39', alignItems: 'center' },
+  orbitTrack: { position: 'absolute', width: 91, height: 91, borderRadius: 46, borderWidth: 1, borderColor: '#7E8291', alignItems: 'center' },
   orbitSatellite: { width: 13, height: 13, borderRadius: 7, backgroundColor: c.amber, marginTop: -7 },
   processingCopy: { flex: 1 },
   processingTitle: { color: c.ink, fontSize: 20, lineHeight: 25, fontWeight: '800', letterSpacing: -0.5, marginBottom: 8 },
@@ -791,7 +935,7 @@ const styles = StyleSheet.create({
   stepIcon: { fontSize: 18, width: 22 },
   stepText: { color: c.ink, fontSize: 14 },
   splitRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 7, flexWrap: 'wrap' },
-  tag: { borderRadius: 8, borderWidth: 1, borderColor: '#5D5435', paddingHorizontal: 8, paddingVertical: 6 },
+  tag: { borderRadius: 8, borderWidth: 1, borderColor: '#81704C', paddingHorizontal: 8, paddingVertical: 6 },
   tagText: { color: c.amber, fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
   analysisTitle: { color: c.ink, fontSize: 21, lineHeight: 27, fontWeight: '800', marginTop: 25 },
   pathText: { color: c.lime, fontFamily: 'monospace', fontSize: 15, marginTop: 12, lineHeight: 22 },
@@ -801,11 +945,11 @@ const styles = StyleSheet.create({
   proposalTitle: { color: c.ink, fontSize: 24, lineHeight: 30, fontWeight: '800', letterSpacing: -0.7, marginTop: 19, marginBottom: 12 },
   fileWrap: { marginTop: 16 },
   fileName: { color: c.lime, fontFamily: 'monospace', fontSize: 12, marginBottom: 10 },
-  diffBox: { borderWidth: 1, borderRadius: 12, borderColor: c.line, backgroundColor: '#070C09', overflow: 'hidden' },
+  diffBox: { borderWidth: 1, borderRadius: 12, borderColor: c.line, backgroundColor: '#08131E', overflow: 'hidden' },
   diffContent: { paddingVertical: 12, minWidth: '100%' },
   diffLine: { color: c.quiet, fontFamily: 'monospace', fontSize: 11, lineHeight: 19, paddingHorizontal: 14 },
-  diffAdded: { backgroundColor: '#19331E', color: '#B9E8AD' },
-  diffRemoved: { backgroundColor: '#3A201E', color: '#F0B1A9' },
+  diffAdded: { backgroundColor: '#163A39', color: '#A8E9DF' },
+  diffRemoved: { backgroundColor: '#402B30', color: '#F5BAB8' },
   approvalNotice: { color: c.quiet, fontSize: 12, lineHeight: 18, marginTop: 22, marginBottom: 15 },
   resultTitle: { fontSize: 31, lineHeight: 36, fontWeight: '900', letterSpacing: -1, marginTop: 22, marginBottom: 14 },
   validation: { borderTopWidth: 1, borderColor: c.line, marginTop: 22, paddingTop: 16, marginBottom: 20 },
@@ -814,7 +958,7 @@ const styles = StyleSheet.create({
   ghostAction: { alignItems: 'center', justifyContent: 'center', minHeight: 52, borderWidth: 1, borderColor: c.line, borderRadius: 12 },
   ghostActionText: { color: c.quiet, fontSize: 10, fontWeight: '800', letterSpacing: 1.1 },
   bottomSpace: { height: 35 },
-  tabBar: { backgroundColor: '#0B110C', borderTopWidth: 1, borderColor: c.line, flexDirection: 'row', paddingBottom: Platform.OS === 'ios' ? 24 : 10 },
+  tabBar: { backgroundColor: '#0C1A28', borderTopWidth: 1, borderColor: c.line, flexDirection: 'row', paddingBottom: Platform.OS === 'ios' ? 24 : 10 },
   tab: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 63 },
   tabIcon: { color: c.dim, fontSize: 22, marginBottom: 3 },
   tabLabel: { color: c.dim, fontWeight: '800', fontSize: 9, letterSpacing: 1.2 },

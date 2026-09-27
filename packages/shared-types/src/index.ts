@@ -94,7 +94,7 @@ export interface SessionHistoryItem {
 
 export interface AgentState {
   workspace: { path: string | null; ready: boolean; files: number };
-  provider: { ready: boolean; model: string };
+  provider: { name: "ollama" | "openrouter"; ready: boolean; model: string };
   pairing: { connected_devices: number };
   session: Session | null;
   history: SessionHistoryItem[];
@@ -103,7 +103,9 @@ export interface AgentState {
 
 export interface Health {
   status: "ok";
+  provider: "ollama" | "openrouter";
   model: string;
+  ai_ready: boolean;
   ollama_ready: boolean;
 }
 

@@ -1,8 +1,9 @@
 """Public API contracts for the local agent."""
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 Stage = Literal[
     "analyzing",
@@ -108,6 +109,22 @@ class PairRequest(BaseModel):
     device_name: str = Field(min_length=1, max_length=80)
 
 
+class ProviderConfigurationRequest(BaseModel):
+    provider: Literal["ollama", "openrouter"]
+    model: str | None = Field(default=None, max_length=160)
+    api_key: SecretStr | None = None
+
+    @field_validator("model")
+    @classmethod
+    def validate_provider_model(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._+-]*/[A-Za-z0-9][A-Za-z0-9._:+-]*",
+            value.strip(),
+        ):
+            raise ValueError("Use a model slug from the OpenRouter event list")
+        return value.strip() if value is not None else None
+
+
 class WorkspaceRequest(BaseModel):
     path: str = Field(min_length=1, max_length=1024)
 
@@ -133,3 +150,22 @@ class GitHubPublishRequest(BaseModel):
 
 class PublishConfirmationRequest(BaseModel):
     revision: int = Field(ge=1)
+
+
+class AssistantRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=1200)
+    session_id: str | None = Field(default=None, max_length=80)
+
+    @field_validator("message")
+    @classmethod
+    def message_must_have_visible_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Ask Pilot a question first.")
+        return value
+
+
+class AssistantResponse(BaseModel):
+    reply: str
+    model: str
+    context_used: bool

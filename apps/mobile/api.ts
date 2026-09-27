@@ -73,7 +73,7 @@ export type SessionHistoryItem = {
 
 export type AgentState = {
   workspace: { path: string | null; ready: boolean; files: number } | null;
-  provider: { ready: boolean; model: string } | null;
+  provider: { name: "ollama" | "openrouter"; ready: boolean; model: string } | null;
   pairing?: unknown;
   session: Session | null;
   history: SessionHistoryItem[];
@@ -81,6 +81,9 @@ export type AgentState = {
 };
 
 export type PairResult = { token: string; device_name: string; expires_at: number };
+
+export type AssistantTurn = { role: 'user' | 'assistant'; content: string };
+export type AssistantResponse = { reply: string; model: string; context_used: boolean };
 
 export function normalizeAgentAddress(value: string): string {
   const trimmed = value.trim().replace(/\/+$/, '');

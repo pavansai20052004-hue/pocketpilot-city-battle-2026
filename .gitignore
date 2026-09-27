@@ -1,5 +1,7 @@
 node_modules/
 dist/
+android/
+apps/mobile/android/
 .expo/
 .venv/
 __pycache__/

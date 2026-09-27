@@ -3,7 +3,7 @@ import type { AgentState, PairingCode, Session } from "@pocketpilot/shared";
 
 const initialState: AgentState = {
   workspace: { path: null, ready: false, files: 0 },
-  provider: { ready: false, model: "qwen3-coder:30b" },
+  provider: { name: "ollama", ready: false, model: "qwen3-coder:30b" },
   pairing: { connected_devices: 0 },
   session: null,
   history: [],
@@ -57,6 +57,8 @@ function App() {
   const [working, setWorking] = useState(false);
   const [connected, setConnected] = useState(false);
   const [lanAddress, setLanAddress] = useState<string>("");
+  const [openRouterKey, setOpenRouterKey] = useState("");
+  const [openRouterModel, setOpenRouterModel] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -98,6 +100,48 @@ function App() {
       setNotice("Workspace selected. The agent will inspect only this folder.");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not select that workspace.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function configureProvider(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setWorking(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const provider = await request<AgentState["provider"]>("/api/provider/config", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "openrouter",
+          api_key: openRouterKey,
+          model: openRouterModel.trim(),
+        }),
+      });
+      setState((current) => ({ ...current, provider }));
+      setNotice("OpenRouter is active for error analysis, fix proposals, and Pilot chat.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not configure OpenRouter.");
+    } finally {
+      setOpenRouterKey("");
+      setWorking(false);
+    }
+  }
+
+  async function useLocalProvider() {
+    setWorking(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const provider = await request<AgentState["provider"]>("/api/provider/config", {
+        method: "POST",
+        body: JSON.stringify({ provider: "ollama" }),
+      });
+      setState((current) => ({ ...current, provider }));
+      setNotice("All new AI requests now use local Ollama on this laptop.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not restore local Ollama.");
     } finally {
       setWorking(false);
     }
@@ -151,9 +195,10 @@ function App() {
     state.pairing.connected_devices > 0,
   ];
   const preflightReady = preflight.every(Boolean);
+  const cloudProvider = state.provider.name === "openrouter";
   const preflightMissing = [
     !connected && "desktop agent",
-    !state.provider.ready && "local model",
+    !state.provider.ready && "AI provider",
     !state.workspace.ready && "workspace",
     state.pairing.connected_devices === 0 && "paired phone",
   ].filter(Boolean);
@@ -189,15 +234,21 @@ function App() {
         <div className="content">
           <section id="overview" className="hero">
             <p className="eyebrow"><span className="accent-line" /> PHONE-FIRST DEVELOPER TOOL</p>
-            <h1>See the error.<br /><em>Keep control.</em></h1>
-            <p className="hero-sub">Your iQOO drives the workflow. This laptop holds the code, runs the local model, and applies only the fix you approve.</p>
+            <h1>Find the fault.<br /><em>Own the fix.</em></h1>
+            <p className="hero-sub">The iQOO captures the problem. This laptop holds the code, runs the checks, and applies only the fix you approve. Choose local Ollama or OpenRouter for model inference.</p>
             <div className="hero-rule" />
             <div className="hero-meta">
               <span><b>01</b> CONNECT THE PHONE</span>
               <span><b>02</b> SELECT A PROJECT</span>
-              <span><b>03</b> DEBUG SAFELY</span>
+              <span><b>03</b> ASK PILOT, THEN DEBUG</span>
             </div>
             <div className="hero-orbit" aria-hidden="true"><div className="hero-orbit-inner">P</div></div>
+          </section>
+
+          <section className="pilot-banner" aria-label="Pilot voice assistant">
+            <div className="pilot-banner-symbol" aria-hidden="true">✳</div>
+            <div><p className="eyebrow">NEW / PILOT CONVERSATION</p><h2>Ask why. Hear the answer.</h2><p>Speech is transcribed on the phone. Pilot receives a bounded summary of the active session. It can explain, but cannot edit or publish. {cloudProvider ? "OpenRouter processes this prompt outside your laptop; avoid sending secrets." : "Ollama processes the prompt locally on this laptop."}</p></div>
+            <span className="pilot-banner-status">{state.provider.ready ? `${cloudProvider ? "CLOUD" : "LOCAL"} · ${state.provider.model}` : "AI PROVIDER OFFLINE"}</span>
           </section>
 
           {error && <div className="alert error" role="alert"><span>!</span><p>{error}</p><button onClick={() => void refresh()}>RETRY</button></div>}
@@ -207,12 +258,31 @@ function App() {
             <div className="readiness-intro"><p className="eyebrow">SYSTEM READINESS</p><h2>Everything in view.</h2><p>No hidden steps. You always know what is connected and what can change.</p></div>
             <div className="readiness-items">
               <div><span className="readiness-icon">◎</span><small>LOCAL AGENT</small><strong>{connected ? "Ready" : "Offline"}</strong></div>
-              <div><span className="readiness-icon">◇</span><small>LOCAL MODEL</small><strong>{state.provider.ready ? "Ready" : "Not ready"}</strong></div>
+              <div><span className="readiness-icon">◇</span><small>{cloudProvider ? "OPENROUTER CLOUD" : "OLLAMA LOCAL"}</small><strong>{state.provider.ready ? "Ready" : "Not ready"}</strong></div>
               <div><span className="readiness-icon">⌁</span><small>WORKSPACE</small><strong>{state.workspace.ready ? "Selected" : "Not selected"}</strong></div>
               <div><span className="readiness-icon">▣</span><small>PHONES PAIRED</small><strong>{state.pairing.connected_devices}</strong></div>
               <div><span className="readiness-icon">✓</span><small>DEMO PREFLIGHT</small><strong>{preflightReady ? "Ready" : `${4 - preflightMissing.length}/4 ready`}</strong></div>
               {!preflightReady && <p className="readiness-note">Before the demo, confirm: {preflightMissing.join(" · ")}. This check is local and does not change project files.</p>}
             </div>
+          </section>
+
+          <section className="panel provider-panel" aria-label="AI provider settings">
+            <div className="panel-heading"><div><p className="eyebrow">AI ROUTE / ALL FEATURES</p><h2>{cloudProvider ? "OpenRouter is active." : "Choose your model route."}</h2></div><span className="panel-symbol">◇</span></div>
+            {cloudProvider ? <>
+              <div className="cloud-egress" role="note"><strong>CLOUD PROCESSING IS ON</strong><p>Error text, the matched source-file window, fix instructions, and Pilot messages are sent to OpenRouter for all model calls. Common credential patterns are redacted, but that cannot guarantee every secret is removed. Review inputs and do not submit credentials.</p></div>
+              <p className="panel-copy">The API key is held only in the laptop agent’s memory until that agent stops; it is not saved to the app, phone, or repository.</p>
+              <button type="button" className="secondary-button" disabled={working} onClick={() => void useLocalProvider()}>SWITCH BACK TO LOCAL OLLAMA</button>
+            </> : <>
+              <p className="panel-copy">Local Ollama keeps prompts on this laptop. To use your event credits for every AI action, enter the model slug shown in the OpenRouter event page and your API key below.</p>
+              <div className="cloud-egress" role="note"><strong>BEFORE SWITCHING</strong><p>With OpenRouter active, error text, a bounded source-file window, and Pilot conversation context leave this laptop. The API key is sent only to OpenRouter and stored only in laptop-agent memory for this run.</p></div>
+              <form onSubmit={(event) => void configureProvider(event)} className="provider-form">
+                <label htmlFor="openrouter-model">RECOMMENDED MODEL SLUG</label>
+                <input id="openrouter-model" autoComplete="off" autoCapitalize="none" spellCheck={false} value={openRouterModel} onChange={(event) => setOpenRouterModel(event.target.value)} placeholder="provider/model-name" required />
+                <label htmlFor="openrouter-key">OPENROUTER API KEY</label>
+                <input id="openrouter-key" type="password" autoComplete="new-password" autoCapitalize="none" spellCheck={false} value={openRouterKey} onChange={(event) => setOpenRouterKey(event.target.value)} placeholder="Paste the key here; it will be cleared after submit" required />
+                <button type="submit" disabled={working || !connected}>{working ? "VERIFYING KEY…" : "USE OPENROUTER FOR ALL AI"}</button>
+              </form>
+            </>}
           </section>
 
           <div className="grid">

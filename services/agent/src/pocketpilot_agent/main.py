@@ -17,18 +17,21 @@ from .history import SessionHistoryStore
 from .models import (
     Analysis,
     ApprovalRequest,
+    AssistantRequest,
+    AssistantResponse,
     GitHubPublishRequest,
     GitHubPublishState,
     NewSessionRequest,
     PairRequest,
     Proposal,
     ProposedFile,
+    ProviderConfigurationRequest,
     PublishConfirmationRequest,
     Session,
     UndoRequest,
     WorkspaceRequest,
 )
-from .provider import MODEL, OllamaProvider, ProviderError
+from .provider import OllamaProvider, OpenRouterProvider, ProviderError
 from .recovery import RecoveryStore
 from .workspace import SourceMatch, Workspace, digest
 
@@ -42,6 +45,12 @@ def text_field(value: object, fallback: str, limit: int = 1500) -> str:
 class AgentState:
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
+        self.chat_lock = asyncio.Lock()
+        # Short-lived assistant memory is keyed by the paired device token and
+        # kept only in RAM. It is never written to the recovery journal.
+        self.chat_history: dict[str, tuple[str | None, list[dict[str, str]]]] = {}
+        self.chat_generation: dict[str, int] = {}
+        self.chat_inflight: set[str] = set()
         self.recovery = RecoveryStore()
         self.history = SessionHistoryStore()
         self.recovery_error: str | None = None
@@ -172,6 +181,11 @@ def prune_expired_tokens() -> None:
     for token, (_device_name, expires_at) in list(state.tokens.items()):
         if expires_at <= now:
             state.tokens.pop(token, None)
+            state.chat_history.pop(token, None)
+            if token in state.chat_inflight:
+                state.chat_generation[token] = state.chat_generation.get(token, 0) + 1
+            else:
+                state.chat_generation.pop(token, None)
 
 
 def paired_only(authorization: str | None = Header(default=None)) -> str:
@@ -201,7 +215,11 @@ async def snapshot() -> dict:
             "ready": workspace is not None,
             "files": len(workspace.files) if workspace else 0,
         },
-        "provider": {"ready": await state.provider.ready(), "model": MODEL},
+        "provider": {
+            "name": state.provider.name,
+            "ready": await state.provider.ready(),
+            "model": state.provider.model,
+        },
         "pairing": {"connected_devices": len(state.tokens)},
         "session": state.session.model_dump() if state.session else None,
         "history": [item.model_dump() for item in state.history.items],
@@ -212,12 +230,43 @@ async def snapshot() -> dict:
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok", "model": MODEL, "ollama_ready": await state.provider.ready()}
+    ready = await state.provider.ready()
+    return {
+        "status": "ok",
+        "provider": state.provider.name,
+        "model": state.provider.model,
+        "ai_ready": ready,
+        "ollama_ready": ready and state.provider.name == "ollama",
+    }
 
 
 @app.get("/api/dashboard", dependencies=[Depends(loopback_only)])
 async def dashboard() -> dict:
     return await snapshot()
+
+
+@app.post("/api/provider/config", dependencies=[Depends(loopback_only)])
+async def configure_provider(body: ProviderConfigurationRequest) -> dict:
+    if body.provider == "ollama":
+        configured = OllamaProvider()
+    else:
+        if body.api_key is None or body.model is None:
+            raise HTTPException(422, "Enter the OpenRouter key and model slug on this laptop")
+        try:
+            configured = OpenRouterProvider(body.api_key.get_secret_value(), body.model)
+        except ProviderError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if not await configured.ready():
+            raise HTTPException(
+                422,
+                "OpenRouter could not verify this key. Check the key, credits, and network, then retry.",
+            )
+    state.provider = configured
+    return {
+        "name": state.provider.name,
+        "ready": await state.provider.ready(),
+        "model": state.provider.model,
+    }
 
 
 @app.post("/api/workspace", dependencies=[Depends(loopback_only)])
@@ -278,12 +327,138 @@ async def pair(request: Request, body: PairRequest) -> dict:
 @app.post("/api/unpair")
 async def unpair(_token: str = Depends(paired_only)) -> dict:
     state.tokens.pop(_token, None)
+    state.chat_history.pop(_token, None)
+    if _token in state.chat_inflight:
+        state.chat_generation[_token] = state.chat_generation.get(_token, 0) + 1
+    else:
+        state.chat_generation.pop(_token, None)
     return {"revoked": True}
 
 
 @app.get("/api/state")
 async def phone_state(_device: str = Depends(paired_only)) -> dict:
     return await snapshot()
+
+
+def assistant_context(session: Session) -> str:
+    """Use recorded session facts, never an unrestricted repository read."""
+    facts = [f"Stage: {session.stage}", f"Input source: {session.source}"]
+    if session.error_text:
+        facts.append(f"Reported error: {session.error_text[:1800]}")
+    if session.analysis:
+        analysis = session.analysis
+        location = (
+            f"{analysis.location.path}:{analysis.location.line}"
+            if analysis.location
+            else "not established"
+        )
+        facts.extend(
+            [
+                f"Location: {location}; confidence: {analysis.confidence}",
+                f"Problem: {analysis.problem[:800]}",
+                f"Evidence: {analysis.evidence[:800]}",
+                f"Repair strategy: {analysis.repair_strategy[:600]}",
+            ]
+        )
+    if session.proposal:
+        facts.append(f"Proposed change: {session.proposal.summary[:600]}")
+        facts.append(
+            "Proposed files: " + ", ".join(file.path for file in session.proposal.files[:3])
+        )
+        facts.append(f"Why the proposal was made: {session.proposal.why[:600]}")
+        facts.append(f"Expected effect: {session.proposal.expected_effect[:500]}")
+    if session.validation:
+        facts.append(
+            f"Validation: {'passed' if session.validation.passed else 'failed'}; "
+            f"command: {session.validation.command}; exit code: {session.validation.exit_code}"
+        )
+    if session.error_message:
+        facts.append(f"Current workflow notice: {session.error_message[:500]}")
+    if session.github_publish:
+        facts.append(f"GitHub publish status: {session.github_publish.status}")
+    return "\n".join(facts)[:6000]
+
+
+@app.post("/api/assistant/chat", response_model=AssistantResponse)
+async def assistant_chat(
+    body: AssistantRequest, _device: str = Depends(paired_only)
+) -> AssistantResponse:
+    # Acquire before any awaited work so a second request is rejected instead
+    # of silently queuing behind a potentially slow local model call.
+    if state.chat_lock.locked():
+        raise HTTPException(429, "Pilot is finishing another answer. Try again shortly.")
+    await state.chat_lock.acquire()
+    state.chat_inflight.add(_device)
+    generation = state.chat_generation.get(_device, 0)
+    try:
+        async with state.lock:
+            current = state.session
+            if body.session_id and (current is None or current.id != body.session_id):
+                raise HTTPException(409, "The active debug session changed. Refresh and try again.")
+            session_revision = current.revision if current and body.session_id else None
+            context = (
+                assistant_context(current.model_copy(deep=True))
+                if current and body.session_id
+                else ""
+            )
+        saved_session_id, saved_history = state.chat_history.get(_device, (body.session_id, []))
+        history = saved_history if saved_session_id == body.session_id else []
+        provider = state.provider
+        try:
+            reply = await provider.chat(
+                message=body.message.strip(),
+                history=history,
+                context=context,
+            )
+        except ProviderError as exc:
+            raise HTTPException(503, str(exc)) from exc
+
+        prune_expired_tokens()
+        if _device not in state.tokens:
+            raise HTTPException(
+                401, "The phone was unpaired while Pilot was replying; response discarded."
+            )
+        if state.chat_generation.get(_device, 0) != generation:
+            raise HTTPException(
+                409, "Chat was cleared while Pilot was replying; response discarded."
+            )
+
+        # Do not return an answer grounded in a debug session that changed
+        # while Ollama was working (for example, a new error was submitted).
+        if body.session_id:
+            async with state.lock:
+                current = state.session
+                if (
+                    current is None
+                    or current.id != body.session_id
+                    or current.revision != session_revision
+                ):
+                    raise HTTPException(
+                        409, "The debug session changed while Pilot was replying. Ask again."
+                    )
+        if state.chat_generation.get(_device, 0) == generation and _device in state.tokens:
+            updated = [
+                *history,
+                {"role": "user", "content": body.message.strip()},
+                {"role": "assistant", "content": reply[:1200]},
+            ]
+            state.chat_history[_device] = (body.session_id, updated[-8:])
+        return AssistantResponse(reply=reply, model=provider.model, context_used=bool(context))
+    finally:
+        state.chat_inflight.discard(_device)
+        state.chat_generation.pop(_device, None)
+        state.chat_lock.release()
+
+
+@app.post("/api/assistant/clear")
+async def clear_assistant_chat(_device: str = Depends(paired_only)) -> dict:
+    """Forget one paired phone's short-term assistant memory immediately."""
+    if _device in state.chat_inflight:
+        state.chat_generation[_device] = state.chat_generation.get(_device, 0) + 1
+    else:
+        state.chat_generation.pop(_device, None)
+    state.chat_history.pop(_device, None)
+    return {"cleared": True}
 
 
 async def analyze_in_background(
@@ -324,7 +499,7 @@ async def analyze_in_background(
             if state.session and state.session.id == session_id:
                 state.session.stage = "analysis_failed"
                 state.session.error_message = (
-                    "Local AI is unavailable. Restore Ollama, then try again."
+                    "The configured AI provider is unavailable. Check its settings and try again."
                 )
                 state.session.revision += 1
                 state.persist()
