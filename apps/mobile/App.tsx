@@ -177,11 +177,14 @@ function ProcessingPanel({ stage }: { stage: Session['stage'] }) {
 function Pipeline({ stage }: { stage: Session['stage'] }) {
   const done = stage === 'undone' ? 4 : stage === 'verified' ? 6 : stage === 'testing' || stage === 'failed' ? 5 : stage === 'awaiting_approval' || stage === 'generating_fix' ? 4 : stage === 'root_cause_found' ? 3 : stage === 'analysis_failed' ? 2 : 1;
   const steps = ['Error received', 'Source context', 'Root cause', 'Safe proposal', 'Human approval', 'Tests verified'];
+  const current = stage === 'undone' ? 'CHANGE REVERSED' : stage === 'verified' ? 'VERIFIED' : stage === 'failed' ? 'CHECKS FAILED' : stage === 'testing' ? 'VERIFYING CHANGE' : stage === 'analysis_failed' ? 'ANALYSIS STOPPED' : (steps[Math.min(done, steps.length - 1)] ?? 'IN PROGRESS').toUpperCase();
   return (
     <View style={styles.pipeline}>
-      <Eyebrow index="01">SESSION PIPELINE</Eyebrow>
+      <View style={styles.pipelineHeader}><Eyebrow index="01">REPAIR ROUTE</Eyebrow><Text style={styles.pipelineCount}>{Math.min(done, 6)} / 06</Text></View>
+      <View style={styles.progressTrack}>{steps.map((name, index) => <View key={name} style={[styles.progressSegment, index < done && styles.progressSegmentDone]} />)}</View>
+      <Text style={styles.pipelineCurrent}>{current}</Text>
       {steps.map((name, index) => <View key={name} style={styles.pipelineStep}>
-        <Text style={[styles.stepIcon, index < done ? { color: c.lime } : index === done ? { color: c.amber } : { color: c.dim }]}>{index < done ? '✓' : index === done ? '●' : '○'}</Text>
+        <Text style={[styles.stepIcon, index < done ? { color: c.signal } : index === done ? { color: c.amber } : { color: c.dim }]}>{index < done ? '✓' : index === done ? '●' : '○'}</Text>
         <Text style={[styles.stepText, index > done && { color: c.dim }]}>{name}</Text>
       </View>)}
     </View>
@@ -195,7 +198,7 @@ function Detail({ label, children }: { label: string; children: React.ReactNode 
 function AnalysisPanel({ session }: { session: Session }) {
   const a = session.analysis;
   if (!a) return null;
-  const confidenceColor = a.confidence === 'high' ? c.lime : a.confidence === 'medium' ? c.amber : c.coral;
+  const confidenceColor = a.confidence === 'high' ? c.signal : a.confidence === 'medium' ? c.amber : c.coral;
   return (
     <Panel accent>
       <View style={styles.splitRow}><Eyebrow index="02">ROOT CAUSE</Eyebrow><View style={[styles.tag, { borderColor: confidenceColor }]}><Text style={[styles.tagText, { color: confidenceColor }]}>{a.confidence.toUpperCase()} CONFIDENCE</Text></View></View>
@@ -256,9 +259,9 @@ function ResultPanel({ session, onUndo, onNew, onPublish, publishMessage, onPubl
   return <>
   <Panel accent={verified}>
     <Eyebrow index={verified ? '✓' : undone ? '↶' : '!'}>{verified ? 'MISSION COMPLETE' : undone ? 'CHANGE REVERSED' : 'NEEDS ATTENTION'}</Eyebrow>
-    <Text style={[styles.resultTitle, { color: verified ? c.lime : undone ? c.ink : c.coral }]}>{verified ? 'Fix verified.' : undone ? 'Fix undone.' : patchNotGenerated ? 'Patch not generated.' : 'Verification failed.'}</Text>
+    <Text style={[styles.resultTitle, { color: verified ? c.teal : undone ? c.ink : c.coral }]}>{verified ? 'Fix verified.' : undone ? 'Fix undone.' : patchNotGenerated ? 'Patch not generated.' : 'Verification failed.'}</Text>
     <Text style={styles.body}>{verified ? 'The approved change passed the selected project check.' : undone ? 'The project files were restored to their pre-fix state.' : session.error_message || 'The change could not be verified. Review the test output before continuing.'}</Text>
-    {session.validation && <View style={styles.validation}><View style={styles.splitRow}><Label>CHECK RUN</Label><Text style={{ color: session.validation.passed ? c.lime : c.coral }}>{session.validation.passed ? 'PASSED' : 'FAILED'}</Text></View><Text style={styles.validationCommand}>{session.validation.command}</Text><Text style={styles.validationOutput} numberOfLines={12}>{session.validation.output}</Text></View>}
+    {session.validation && <View style={styles.validation}><View style={styles.splitRow}><Label>CHECK RUN</Label><Text style={{ color: session.validation.passed ? c.teal : c.coral }}>{session.validation.passed ? 'PASSED' : 'FAILED'}</Text></View><Text style={styles.validationCommand}>{session.validation.command}</Text><Text style={styles.validationOutput} numberOfLines={12}>{session.validation.output}</Text></View>}
     {patchApplied && <><Button onPress={onUndo} disabled={busy || undoBlocked} tone={verified ? 'secondary' : 'danger'} icon="↶">UNDO FIX</Button><View style={styles.buttonGap} /></>}
     <Button onPress={onNew} disabled={busy || (patchApplied && !pushed)} tone={verified ? 'secondary' : 'primary'}>{pushed ? 'START NEXT SESSION' : 'START A NEW SESSION'}</Button>
     {patchApplied && <Text style={styles.fieldHint}>{pushed ? 'This verified fix is committed and pushed. It remains in the project; the session will be archived when you start the next one.' : undoBlocked ? 'A commit may exist or a publish request is pending. Resolve the laptop publish state before undoing or starting another session.' : 'Undo the applied patch before starting another session.'}</Text>}
@@ -741,15 +744,15 @@ export default function App() {
   const visibleNotice = networkError || notice;
 
   return <View style={styles.screen}>
-    <StatusBar style="light" />
+    <StatusBar style="dark" />
     <BrandHeader connected={Boolean(token && connected)} paired={Boolean(token)} onDisconnect={() => { void disconnect(); }} />
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={styles.flex} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {visibleNotice && <View style={styles.notice}><Text style={styles.noticeHeading}>CONNECTION OR REQUEST ISSUE</Text><Text style={styles.noticeBody}>{visibleNotice}</Text>{token && <><Pressable accessibilityRole="button" onPress={() => { setNotice(null); void refresh(); }}><Text style={styles.noticeRetry}>TRY AGAIN  ↗</Text></Pressable><Pressable accessibilityRole="button" onPress={() => { void disconnect(); }}><Text style={styles.noticeRetry}>PAIR AGAIN  ↗</Text></Pressable></>}</View>}
         {!token ? <>
           <Eyebrow index="00">THE PHONE IS YOUR CONTROL SURFACE</Eyebrow>
-          <Text style={styles.heroTitle}>Your next fix starts here<Text style={{ color: c.lime }}>.</Text></Text>
-          <Text style={styles.heroBody}>Connect this iQOO to your laptop agent. See the evidence, approve the change, and verify the result from your hand.</Text>
+          <Text style={styles.heroTitle}>Hold the line.<Text style={{ color: c.signal }}> Fix the code.</Text></Text>
+          <Text style={styles.heroBody}>Your phone becomes the command surface for a real project on your laptop. Connect once, then review every decision from here.</Text>
           <Panel accent>
             <Eyebrow index="01">SECURE LOCAL LINK</Eyebrow>
             <Text style={styles.fieldLabel}>LAPTOP ADDRESS</Text>
@@ -762,14 +765,14 @@ export default function App() {
           <View style={styles.privacyLine}><View style={styles.privacyDot} /><Text style={styles.privacyText}>LOCAL-FIRST  ·  HUMAN APPROVAL BEFORE ANY WRITE</Text></View>
         </> : tab === 'home' ? <>
           <Eyebrow index="LIVE / 01">FIELD INSTRUMENT</Eyebrow>
-          <Text style={styles.heroTitle}>The desk, in your hand<Text style={{ color: c.lime }}>.</Text></Text>
-          <Text style={styles.heroBody}>Your phone directs the fix. Your laptop keeps the code and selected AI route.</Text>
+          <Text style={styles.heroTitle}>A repair, in your hands<Text style={{ color: c.signal }}>.</Text></Text>
+          <Text style={styles.heroBody}>Capture the failure. Inspect the evidence. Approve the exact change. Watch the tests run.</Text>
           <Panel accent>
-            <Eyebrow index="↗">YOUR WORKSPACE</Eyebrow>
+            <View style={styles.splitRow}><Eyebrow index="↗">ACTIVE WORKSPACE</Eyebrow><Text style={styles.liveBadge}>{connected ? '●  LINKED' : '○  OFFLINE'}</Text></View>
             <Text style={styles.workspaceName}>{state?.workspace?.path || 'No project selected'}</Text>
-            <View style={styles.metricRow}><Metric value={state?.workspace?.ready ? 'READY' : 'WAITING'} label="PROJECT" /><Metric value={state?.provider?.ready ? 'LOCAL' : 'OFFLINE'} label="AI MODEL" /></View>
+            <View style={styles.metricRow}><Metric value={state?.workspace?.ready ? 'READY' : 'WAITING'} label="PROJECT" /><Metric value={state?.provider?.ready ? state.provider.name === 'openrouter' ? 'CLOUD' : 'LOCAL' : 'OFFLINE'} label="AI ROUTE" /></View>
             <Text style={styles.fieldHint}>{state?.workspace?.ready ? 'The desktop agent has a project selected and can inspect its source safely.' : 'Select a project in the laptop dashboard before analyzing an error.'}</Text>
-            <Button onPress={() => setTab('debug')} icon="↗">{session ? 'OPEN LIVE SESSION' : 'START DEBUGGING'}</Button>
+            <Button onPress={() => setTab('debug')} icon="↗">{session ? 'CONTINUE REPAIR' : 'START A REPAIR'}</Button>
           </Panel>
           <Panel>
             <Eyebrow index="02">PILOT / CONVERSATION</Eyebrow>
@@ -805,16 +808,19 @@ export default function App() {
           readAloud={readAloud}
           session={state?.session ?? null}
           model={state?.provider?.ready ? state.provider.model : null}
+          providerName={state?.provider?.name ?? null}
         /> : tab === 'sessions' ? <HistoryPanel items={state?.history ?? []} historyError={state?.history_error} /> : tab === 'settings' ? <SettingsPanel connected={connected} agentUrl={agentUrl} state={state} onForgetPairing={() => { void disconnect(); }} onOpenDeviceSettings={() => { void openDeviceSettings(); }} /> : <>
           <Eyebrow index="LIVE / 02">VISION DEBUGGER</Eyebrow>
-          <Text style={styles.pageTitle}>{showComposer ? 'Show us the failure.' : session?.stage === 'verified' ? 'A fix, proven.' : session?.stage === 'undone' ? 'Back to the baseline.' : 'Follow the signal.'}</Text>
+          <Text style={styles.pageTitle}>{showComposer ? 'Capture the failure.' : session?.stage === 'verified' ? 'A fix, proven.' : session?.stage === 'undone' ? 'Back to the baseline.' : 'Follow the signal.'}</Text>
           <Text style={styles.pageSubtitle}>{showComposer ? 'Scan an error or paste a stack trace. Review the text before analysis.' : 'One bounded session. Every decision visible.'}</Text>
           {showComposer ? <Panel>
             <Eyebrow index="01">ERROR INPUT</Eyebrow>
+            <Text style={styles.inputIntro}>What went wrong?</Text>
+            <Text style={styles.inputSupport}>Point your camera at the failing terminal, choose an image, or paste the trace below.</Text>
             {state?.provider?.name === 'openrouter' && <Text style={styles.cautionText}>OPENROUTER CLOUD ACTIVE · ANALYZE sends the reviewed error and matched source context to the cloud. Remove secrets first.</Text>}
             <View style={styles.captureRow}>
-              <Pressable accessibilityRole="button" disabled={busy || voiceListening} onPress={() => { void scan('camera'); }} style={styles.captureAction}><Text style={styles.captureText}>▣  CAMERA</Text></Pressable>
-              <Pressable accessibilityRole="button" disabled={busy || voiceListening} onPress={() => { void scan('gallery'); }} style={styles.captureAction}><Text style={styles.captureText}>◫  SCREENSHOT</Text></Pressable>
+              <Pressable accessibilityRole="button" disabled={busy || voiceListening} onPress={() => { void scan('camera'); }} style={styles.captureAction}><Text style={styles.captureIcon}>▣</Text><Text style={styles.captureText}>CAMERA</Text></Pressable>
+              <Pressable accessibilityRole="button" disabled={busy || voiceListening} onPress={() => { void scan('gallery'); }} style={styles.captureAction}><Text style={styles.captureIcon}>◫</Text><Text style={styles.captureText}>SCREENSHOT</Text></Pressable>
             </View>
             {imageUri && <Image source={{ uri: imageUri }} style={styles.imagePreview} resizeMode="contain" accessibilityLabel="Selected error image preview" />}
             {imageUri && <Text style={styles.fieldHint}>Image stays on this phone. Check and edit the extracted text below; only that text is sent when you tap Analyze.</Text>}
@@ -828,12 +834,12 @@ export default function App() {
             {!state?.workspace?.ready && <Text style={styles.cautionText}>Choose a workspace in the desktop dashboard first.</Text>}
           </Panel> : session ? <>
             {workingStages.has(session.stage) && <ProcessingPanel key={session.stage} stage={session.stage} />}
-            <Pipeline stage={session.stage} />
             <AnalysisPanel session={session} />
             {session.stage === 'root_cause_found' && <Panel><Eyebrow index="03">NEXT DECISION</Eyebrow><Text style={styles.proposalTitle}>Ready to design a fix?</Text><Text style={styles.body}>The laptop will propose a bounded diff. You can review it before any file changes.</Text><View style={styles.sectionTop}><Button onPress={() => { void action(`/api/sessions/${session.id}/proposal`, {}); }} disabled={busy || !session.analysis?.location} icon="↗">GENERATE FIX</Button></View>{!session.analysis?.location && <Text style={styles.cautionText}>A safe repository location was not established, so a patch cannot be generated.</Text>}</Panel>}
             {session.stage === 'awaiting_approval' && <ProposalPanel session={session} busy={busy} onApprove={() => { if (session.proposal) void action(`/api/sessions/${session.id}/approve`, { proposal_id: session.proposal.id, revision: session.revision }, 300000); }} onReject={() => setComposeNew(true)} />}
             {showResult && <ResultPanel session={session} busy={busy} publishMessage={publishMessage} onPublishMessage={setPublishMessage} onPublish={() => confirmGitHubPublish(session)} onUndo={() => { void action(`/api/sessions/${session.id}/undo`, { revision: session.revision }); }} onNew={() => { setComposeNew(true); setErrorText(''); }} />}
             {session.stage === 'analysis_failed' && <Panel><Eyebrow index="!">ANALYSIS STOPPED</Eyebrow><Text style={styles.resultTitle}>No trusted location yet.</Text><Text style={styles.body}>{session.error_message || 'The error did not resolve to a safe source file. Review the text and try again.'}</Text><View style={styles.sectionTop}><Button onPress={() => { setErrorText(session.error_text); setComposeNew(true); }}>REVIEW ERROR TEXT</Button></View></Panel>}
+            <Pipeline stage={session.stage} />
             {!workingStages.has(session.stage) && !showResult && <Pressable accessibilityRole="button" onPress={() => { setErrorText(session.error_text); setComposeNew(true); }} style={styles.ghostAction}><Text style={styles.ghostActionText}>REVIEW / START ANOTHER ERROR  ↗</Text></Pressable>}
           </> : null}
         </>}
@@ -853,51 +859,52 @@ export default function App() {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   screen: { flex: 1, backgroundColor: c.canvas, paddingTop: Platform.OS === 'android' ? NativeStatusBar.currentHeight || 24 : 0 },
-  header: { minHeight: 92, borderBottomWidth: 1, borderColor: c.line, paddingHorizontal: 20, paddingVertical: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  header: { minHeight: 82, backgroundColor: '#102B31', borderBottomWidth: 3, borderColor: c.lime, paddingHorizontal: 20, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   brandWrap: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1 },
-  brandMark: { width: 42, height: 42, borderRadius: 12, backgroundColor: c.lime, alignItems: 'center', justifyContent: 'center' },
-  brandMarkText: { color: c.canvas, fontSize: 22, fontWeight: '900', letterSpacing: -2 },
-  brandName: { color: c.ink, fontSize: 14, fontWeight: '900', letterSpacing: 2 },
-  brandSubtitle: { color: c.dim, fontSize: 8, fontWeight: '700', letterSpacing: 1.6, marginTop: 2 },
-  connectionPill: { minHeight: 44, borderWidth: 1, borderColor: c.line, borderRadius: 25, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 10 },
+  brandMark: { width: 40, height: 40, borderRadius: 10, backgroundColor: c.lime, alignItems: 'center', justifyContent: 'center' },
+  brandMarkText: { color: '#102B31', fontSize: 21, fontWeight: '900', letterSpacing: -2 },
+  brandName: { color: '#F4F7ED', fontSize: 14, fontWeight: '900', letterSpacing: 2 },
+  brandSubtitle: { color: '#AEC0BC', fontSize: 8, fontWeight: '700', letterSpacing: 1.6, marginTop: 2 },
+  connectionPill: { minHeight: 42, borderWidth: 1, borderColor: '#4D6768', borderRadius: 25, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 11 },
   connectionDot: { width: 7, height: 7, borderRadius: 4 },
-  connectionText: { color: c.quiet, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
-  content: { paddingHorizontal: 20, paddingTop: 28, width: '100%', maxWidth: 700, alignSelf: 'center' },
+  connectionText: { color: '#F4F7ED', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  content: { paddingHorizontal: 20, paddingTop: 27, width: '100%', maxWidth: 700, alignSelf: 'center' },
   label: { fontSize: 10, fontWeight: '800', letterSpacing: 2.1 },
   eyebrowRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  eyebrowIndex: { color: c.lime, fontSize: 10, fontWeight: '800', letterSpacing: 1, fontFamily: 'monospace' },
-  heroTitle: { color: c.ink, fontSize: 42, lineHeight: 46, letterSpacing: -2.2, fontWeight: '800', marginTop: 18, maxWidth: 440 },
-  heroBody: { color: c.quiet, fontSize: 15, lineHeight: 24, marginTop: 15, maxWidth: 460, marginBottom: 30 },
-  pageTitle: { color: c.ink, fontSize: 36, lineHeight: 41, letterSpacing: -1.5, fontWeight: '800', marginTop: 14 },
+  eyebrowIndex: { color: c.signal, fontSize: 10, fontWeight: '800', letterSpacing: 1, fontFamily: 'monospace' },
+  heroTitle: { color: c.ink, fontSize: 40, lineHeight: 45, letterSpacing: -2, fontWeight: '900', marginTop: 17, maxWidth: 440 },
+  heroBody: { color: c.quiet, fontSize: 15, lineHeight: 23, marginTop: 13, maxWidth: 460, marginBottom: 27 },
+  pageTitle: { color: c.ink, fontSize: 35, lineHeight: 40, letterSpacing: -1.5, fontWeight: '900', marginTop: 13 },
   pageSubtitle: { color: c.quiet, fontSize: 14, lineHeight: 22, marginTop: 9, marginBottom: 24 },
-  panel: { backgroundColor: c.raised, borderWidth: 1, borderColor: c.line, borderRadius: 24, padding: 20, marginBottom: 18 },
-  panelAccent: { backgroundColor: '#132B3D', borderColor: '#526A72' },
+  panel: { backgroundColor: c.raised, borderWidth: 1, borderColor: c.line, borderRadius: 20, padding: 19, marginBottom: 16 },
+  panelAccent: { backgroundColor: '#FBFFF0', borderColor: '#9EBD75' },
   fieldLabel: { color: c.quiet, fontSize: 10, fontWeight: '800', letterSpacing: 1.7, marginTop: 25, marginBottom: 10 },
-  input: { minHeight: 56, borderRadius: 12, borderWidth: 1, borderColor: c.line, backgroundColor: c.canvas, color: c.ink, paddingHorizontal: 16, fontSize: 17 },
+  input: { minHeight: 56, borderRadius: 12, borderWidth: 1, borderColor: c.line, backgroundColor: '#F8F9F3', color: c.ink, paddingHorizontal: 16, fontSize: 17 },
   fieldHint: { color: c.dim, fontSize: 12, lineHeight: 18, marginTop: 10, marginBottom: 14 },
-  button: { minHeight: 54, borderRadius: 12, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 },
+  button: { minHeight: 54, borderRadius: 11, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 },
   buttonPrimary: { backgroundColor: c.lime },
-  buttonSecondary: { backgroundColor: c.raisedAlt, borderWidth: 1, borderColor: '#49564B' },
-  buttonDanger: { backgroundColor: c.raisedAlt, borderWidth: 1, borderColor: c.coral },
+  buttonSecondary: { backgroundColor: '#F4F7EF', borderWidth: 1, borderColor: c.line },
+  buttonDanger: { backgroundColor: '#FFF2EE', borderWidth: 1, borderColor: c.coral },
   buttonDisabled: { opacity: 0.45 },
   buttonPressed: { opacity: 0.75 },
   buttonText: { color: c.ink, fontSize: 12, letterSpacing: 1.2, fontWeight: '900' },
-  buttonTextPrimary: { color: c.canvas },
+  buttonTextPrimary: { color: '#102B31' },
   buttonGap: { height: 10 },
   privacyLine: { flexDirection: 'row', gap: 9, alignItems: 'center', marginTop: 10 },
   privacyDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: c.teal },
   privacyText: { color: c.dim, fontSize: 9, letterSpacing: 1.1, fontWeight: '700' },
-  notice: { backgroundColor: '#322326', borderColor: '#80515A', borderWidth: 1, borderRadius: 18, padding: 18, marginBottom: 20 },
+  notice: { backgroundColor: '#FFF0EA', borderColor: '#DEAAA1', borderWidth: 1, borderRadius: 16, padding: 18, marginBottom: 20 },
   noticeHeading: { color: c.coral, fontSize: 10, fontWeight: '900', letterSpacing: 1.6 },
   noticeBody: { color: c.ink, lineHeight: 21, marginTop: 10 },
   noticeRetry: { color: c.amber, fontWeight: '800', letterSpacing: 1.2, fontSize: 11, marginTop: 16 },
-  workspaceName: { color: c.ink, fontSize: 20, lineHeight: 27, fontWeight: '700', marginTop: 21, marginBottom: 18 },
+  workspaceName: { color: c.ink, fontSize: 20, lineHeight: 27, fontWeight: '800', marginTop: 18, marginBottom: 16 },
+  liveBadge: { color: c.signal, fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
   metricRow: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: c.line, paddingVertical: 19, flexDirection: 'row', gap: 25, marginTop: 18, marginBottom: 18 },
   metric: { flex: 1, gap: 5 },
   metricValue: { color: c.ink, fontSize: 20, fontWeight: '800', letterSpacing: -0.5 },
   sectionTop: { marginTop: 24, marginBottom: 14 },
   howRow: { flexDirection: 'row', gap: 20, borderBottomWidth: 1, borderColor: c.line, paddingVertical: 17 },
-  howNumber: { color: c.lime, fontFamily: 'monospace', fontWeight: '700', fontSize: 13 },
+  howNumber: { color: c.signal, fontFamily: 'monospace', fontWeight: '700', fontSize: 13 },
   howTitle: { color: c.ink, fontSize: 16, fontWeight: '700' },
   howBody: { color: c.dim, fontSize: 12, marginTop: 5 },
   settingsLabel: { color: c.dim, fontSize: 9, fontWeight: '800', letterSpacing: 1.4, marginTop: 17 },
@@ -905,20 +912,23 @@ const styles = StyleSheet.create({
   settingsRow: { borderTopWidth: 1, borderColor: c.line, paddingVertical: 15 },
   settingsRowTitle: { color: c.ink, fontSize: 14, fontWeight: '700' },
   settingsRowBody: { color: c.quiet, fontSize: 12, lineHeight: 19, marginTop: 6 },
-  errorInput: { minHeight: 220, backgroundColor: c.canvas, color: c.ink, borderColor: c.line, borderWidth: 1, borderRadius: 14, padding: 15, fontFamily: 'monospace', fontSize: 13, lineHeight: 21, marginTop: 18 },
-  captureRow: { flexDirection: 'row', gap: 10, marginTop: 18 },
-  captureAction: { flex: 1, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: c.line, borderRadius: 12, backgroundColor: c.canvas },
-  captureText: { color: c.lime, fontSize: 11, fontWeight: '800', letterSpacing: 0.7 },
-  voiceAction: { minHeight: 50, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: c.lime, borderRadius: 12, backgroundColor: c.canvas, marginTop: 12 },
-  voiceActionActive: { backgroundColor: '#322326', borderColor: c.coral },
-  voiceActionText: { color: c.lime, fontSize: 11, fontWeight: '900', letterSpacing: 1 },
+  inputIntro: { color: c.ink, fontSize: 23, fontWeight: '800', letterSpacing: -0.5, marginTop: 17 },
+  inputSupport: { color: c.quiet, fontSize: 13, lineHeight: 19, marginTop: 6 },
+  errorInput: { minHeight: 205, backgroundColor: '#F8F9F3', color: c.ink, borderColor: c.line, borderWidth: 1, borderRadius: 12, padding: 15, fontFamily: 'monospace', fontSize: 13, lineHeight: 21, marginTop: 17 },
+  captureRow: { flexDirection: 'row', gap: 10, marginTop: 17 },
+  captureAction: { flex: 1, minHeight: 73, alignItems: 'flex-start', justifyContent: 'center', borderWidth: 1, borderColor: '#A6BAAA', borderRadius: 12, backgroundColor: '#F7FAF0', paddingHorizontal: 16 },
+  captureIcon: { color: c.signal, fontSize: 21, marginBottom: 3 },
+  captureText: { color: c.ink, fontSize: 11, fontWeight: '900', letterSpacing: 0.7 },
+  voiceAction: { minHeight: 49, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#9AB28B', borderRadius: 11, backgroundColor: '#F7FAF0', marginTop: 11 },
+  voiceActionActive: { backgroundColor: '#FFF0EA', borderColor: c.coral },
+  voiceActionText: { color: c.signal, fontSize: 11, fontWeight: '900', letterSpacing: 1 },
   voiceActionTextActive: { color: c.coral },
   voiceStatus: { color: c.amber, fontSize: 12, lineHeight: 19, marginTop: 9 },
   imagePreview: { height: 150, width: '100%', borderRadius: 12, backgroundColor: c.canvas, marginTop: 14 },
   processingMain: { flexDirection: 'row', gap: 17, alignItems: 'center', marginTop: 22 },
   orbitBox: { width: 91, height: 91, alignItems: 'center', justifyContent: 'center' },
   orbitInner: { width: 68, height: 68, borderRadius: 34, borderWidth: 7, borderColor: c.lime, alignItems: 'center', justifyContent: 'center' },
-  orbitCenter: { color: c.lime, fontSize: 18 },
+  orbitCenter: { color: c.signal, fontSize: 18 },
   orbitTrack: { position: 'absolute', width: 91, height: 91, borderRadius: 46, borderWidth: 1, borderColor: '#7E8291', alignItems: 'center' },
   orbitSatellite: { width: 13, height: 13, borderRadius: 7, backgroundColor: c.amber, marginTop: -7 },
   processingCopy: { flex: 1 },
@@ -928,39 +938,45 @@ const styles = StyleSheet.create({
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: c.lime },
   liveText: { color: c.quiet, fontSize: 11 },
   processDisclosure: { minHeight: 44, borderTopWidth: 1, borderColor: c.line, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 20 },
-  processDisclosureText: { color: c.lime, fontWeight: '800', fontSize: 10, letterSpacing: 1.3 },
+  processDisclosureText: { color: c.signal, fontWeight: '800', fontSize: 10, letterSpacing: 1.3 },
   processDetail: { color: c.quiet, fontSize: 12, lineHeight: 19, marginBottom: 6 },
-  pipeline: { borderColor: c.line, borderWidth: 1, borderRadius: 24, paddingHorizontal: 20, paddingTop: 22, paddingBottom: 7, backgroundColor: c.raised, marginBottom: 18 },
-  pipelineStep: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 17, borderBottomWidth: 1, borderColor: c.line },
-  stepIcon: { fontSize: 18, width: 22 },
-  stepText: { color: c.ink, fontSize: 14 },
+  pipeline: { borderColor: c.line, borderWidth: 1, borderRadius: 18, paddingHorizontal: 19, paddingTop: 18, paddingBottom: 9, backgroundColor: c.raised, marginBottom: 16 },
+  pipelineHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  pipelineCount: { color: c.signal, fontFamily: 'monospace', fontWeight: '800', fontSize: 11 },
+  progressTrack: { flexDirection: 'row', gap: 4, marginTop: 14 },
+  progressSegment: { flex: 1, height: 5, borderRadius: 3, backgroundColor: c.raisedAlt },
+  progressSegmentDone: { backgroundColor: c.lime },
+  pipelineCurrent: { color: c.ink, fontSize: 11, fontWeight: '900', letterSpacing: 0.9, marginTop: 10, marginBottom: 4 },
+  pipelineStep: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 12, borderBottomWidth: 1, borderColor: '#E5E9E1' },
+  stepIcon: { fontSize: 14, width: 18 },
+  stepText: { color: c.ink, fontSize: 12 },
   splitRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 7, flexWrap: 'wrap' },
-  tag: { borderRadius: 8, borderWidth: 1, borderColor: '#81704C', paddingHorizontal: 8, paddingVertical: 6 },
+  tag: { borderRadius: 8, borderWidth: 1, borderColor: '#A78146', paddingHorizontal: 8, paddingVertical: 6 },
   tagText: { color: c.amber, fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
   analysisTitle: { color: c.ink, fontSize: 21, lineHeight: 27, fontWeight: '800', marginTop: 25 },
-  pathText: { color: c.lime, fontFamily: 'monospace', fontSize: 15, marginTop: 12, lineHeight: 22 },
+  pathText: { color: c.signal, fontFamily: 'monospace', fontSize: 15, marginTop: 12, lineHeight: 22 },
   detail: { paddingTop: 17, borderTopWidth: 1, borderColor: c.line, marginTop: 19 },
   detailBody: { color: c.quiet, fontSize: 13, lineHeight: 21, marginTop: 10 },
   cautionText: { color: c.amber, fontSize: 12, lineHeight: 19, marginTop: 14 },
   proposalTitle: { color: c.ink, fontSize: 24, lineHeight: 30, fontWeight: '800', letterSpacing: -0.7, marginTop: 19, marginBottom: 12 },
   fileWrap: { marginTop: 16 },
-  fileName: { color: c.lime, fontFamily: 'monospace', fontSize: 12, marginBottom: 10 },
-  diffBox: { borderWidth: 1, borderRadius: 12, borderColor: c.line, backgroundColor: '#08131E', overflow: 'hidden' },
+  fileName: { color: c.signal, fontFamily: 'monospace', fontSize: 12, marginBottom: 10 },
+  diffBox: { borderWidth: 1, borderRadius: 12, borderColor: '#28424A', backgroundColor: '#102B31', overflow: 'hidden' },
   diffContent: { paddingVertical: 12, minWidth: '100%' },
-  diffLine: { color: c.quiet, fontFamily: 'monospace', fontSize: 11, lineHeight: 19, paddingHorizontal: 14 },
+  diffLine: { color: '#D1DED6', fontFamily: 'monospace', fontSize: 11, lineHeight: 19, paddingHorizontal: 14 },
   diffAdded: { backgroundColor: '#163A39', color: '#A8E9DF' },
   diffRemoved: { backgroundColor: '#402B30', color: '#F5BAB8' },
   approvalNotice: { color: c.quiet, fontSize: 12, lineHeight: 18, marginTop: 22, marginBottom: 15 },
   resultTitle: { fontSize: 31, lineHeight: 36, fontWeight: '900', letterSpacing: -1, marginTop: 22, marginBottom: 14 },
   validation: { borderTopWidth: 1, borderColor: c.line, marginTop: 22, paddingTop: 16, marginBottom: 20 },
-  validationCommand: { color: c.lime, fontFamily: 'monospace', fontSize: 11, marginTop: 10 },
+  validationCommand: { color: c.signal, fontFamily: 'monospace', fontSize: 11, marginTop: 10 },
   validationOutput: { color: c.quiet, fontFamily: 'monospace', fontSize: 10, lineHeight: 16, marginTop: 9 },
   ghostAction: { alignItems: 'center', justifyContent: 'center', minHeight: 52, borderWidth: 1, borderColor: c.line, borderRadius: 12 },
   ghostActionText: { color: c.quiet, fontSize: 10, fontWeight: '800', letterSpacing: 1.1 },
   bottomSpace: { height: 35 },
-  tabBar: { backgroundColor: '#0C1A28', borderTopWidth: 1, borderColor: c.line, flexDirection: 'row', paddingBottom: Platform.OS === 'ios' ? 24 : 10 },
+  tabBar: { backgroundColor: '#102B31', borderTopWidth: 1, borderColor: '#355157', flexDirection: 'row', paddingBottom: Platform.OS === 'ios' ? 24 : 10 },
   tab: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 63 },
-  tabIcon: { color: c.dim, fontSize: 22, marginBottom: 3 },
-  tabLabel: { color: c.dim, fontWeight: '800', fontSize: 9, letterSpacing: 1.2 },
+  tabIcon: { color: '#A6B8B5', fontSize: 22, marginBottom: 3 },
+  tabLabel: { color: '#A6B8B5', fontWeight: '800', fontSize: 9, letterSpacing: 1.1 },
   activeTab: { color: c.lime },
 });

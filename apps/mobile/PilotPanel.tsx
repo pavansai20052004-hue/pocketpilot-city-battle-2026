@@ -20,6 +20,7 @@ type Props = {
   readAloud: boolean;
   session: Session | null;
   model: string | null;
+  providerName: string | null;
 };
 
 function suggestedPrompts(stage?: string) {
@@ -52,15 +53,16 @@ function suggestedPrompts(stage?: string) {
 
 export function PilotPanel({
   turns, draft, onDraft, onSend, onClear, onVoice, onSpeak, onToggleReadAloud,
-  busy, connected, listening, voiceStatus, error, readAloud, session, model,
+  busy, connected, listening, voiceStatus, error, readAloud, session, model, providerName,
 }: Props) {
   const location = session?.analysis?.location;
   const prompts = suggestedPrompts(session?.stage);
+  const cloud = providerName === 'openrouter';
   return <>
     <View style={styles.heading}>
-      <Text style={styles.eyebrow}>PILOT / LOCAL CONVERSATION</Text>
-      <Text style={styles.title}>Talk it through<Text style={styles.period}>.</Text></Text>
-      <Text style={styles.subtitle}>Ask about the failure, the evidence, or the next safe step. Ollama answers on your laptop.</Text>
+      <Text style={styles.eyebrow}>PILOT / SESSION GUIDE</Text>
+      <Text style={styles.title}>Ask what happened<Text style={styles.period}>.</Text></Text>
+      <Text style={styles.subtitle}>Ask about the failure, its evidence, or the next safe step. Pilot keeps the current repair in view.</Text>
     </View>
 
     <View style={styles.contextStrip}>
@@ -71,7 +73,7 @@ export function PilotPanel({
           {location ? `${location.path}:${location.line}  ·  ${session?.stage.replaceAll('_', ' ')}` : session ? `Session ${session.stage.replaceAll('_', ' ')}` : 'Start a debug session to ground answers in its evidence.'}
         </Text>
       </View>
-      <Text style={styles.contextModel}>{model ? 'LOCAL AI' : 'WAITING'}</Text>
+      <Text style={styles.contextModel}>{model ? cloud ? 'CLOUD AI' : 'LOCAL AI' : 'WAITING'}</Text>
     </View>
 
     <View style={styles.conversation}>
@@ -81,7 +83,7 @@ export function PilotPanel({
         <Text style={styles.emptyBody}>Pilot can explain what the current run found. It cannot edit files or approve a change for you.</Text>
       </View> : <>
         {turns.map((turn, index) => <View key={`${index}-${turn.role}`} style={[styles.message, turn.role === 'user' ? styles.userMessage : styles.pilotMessage]}>
-          <Text style={[styles.speaker, turn.role === 'user' && styles.userSpeaker]}>{turn.role === 'user' ? 'YOU' : 'PILOT  ·  LOCAL AI'}</Text>
+          <Text style={[styles.speaker, turn.role === 'user' && styles.userSpeaker]}>{turn.role === 'user' ? 'YOU' : cloud ? 'PILOT  ·  CLOUD AI' : 'PILOT  ·  LOCAL AI'}</Text>
           <Text style={styles.messageText}>{turn.content}</Text>
           {turn.role === 'assistant' && <Pressable accessibilityRole="button" accessibilityLabel="Read Pilot reply aloud" onPress={() => onSpeak(turn.content)} style={styles.listenButton}><Text style={styles.listenText}>◖  LISTEN</Text></Pressable>}
         </View>)}
@@ -95,7 +97,7 @@ export function PilotPanel({
           <Text style={styles.promptText}>{prompt}  ↗</Text>
         </Pressable>)}
       </View>
-      {busy && <View style={styles.thinking}><ActivityIndicator color={c.lime} size="small" /><Text style={styles.thinkingText}>PILOT IS THINKING ON YOUR LAPTOP…</Text></View>}
+      {busy && <View style={styles.thinking}><ActivityIndicator color={c.lime} size="small" /><Text style={styles.thinkingText}>{cloud ? 'PILOT IS THINKING IN THE CLOUD…' : 'PILOT IS THINKING ON YOUR LAPTOP…'}</Text></View>}
     </View>
 
     <View style={styles.composer}>
@@ -117,55 +119,55 @@ export function PilotPanel({
       </View>
       {voiceStatus && <Text style={styles.voiceNote}>{voiceStatus}</Text>}
       {error && <Text style={styles.error}>{error}</Text>}
-      <Text style={styles.privacy}>Speech is transcribed on the phone. Your question and a bounded session summary go to loopback Ollama on the paired laptop. Recent chat memory stays in laptop RAM and is cleared on request, session change, unpair, or agent restart. Do not include credentials. The phone-to-laptop link uses HTTP; use a trusted Wi-Fi network.</Text>
+      <Text style={styles.privacy}>Speech is transcribed on the phone. Your question and a bounded session summary go to the paired laptop{cloud ? ', then to OpenRouter' : ' for local Ollama inference'}. Recent chat memory stays in laptop RAM and is cleared on request, session change, unpair, or agent restart. Do not include credentials. Use a trusted Wi-Fi network.</Text>
     </View>
   </>;
 }
 
 const styles = StyleSheet.create({
   heading: { marginBottom: 24 },
-  eyebrow: { color: c.lime, fontSize: 10, fontWeight: '900', letterSpacing: 2.2 },
-  title: { color: c.ink, fontSize: 38, lineHeight: 43, fontWeight: '900', letterSpacing: -1.8, marginTop: 14 },
-  period: { color: c.lime },
+  eyebrow: { color: c.signal, fontSize: 10, fontWeight: '900', letterSpacing: 2.2 },
+  title: { color: c.ink, fontSize: 37, lineHeight: 42, fontWeight: '900', letterSpacing: -1.8, marginTop: 14 },
+  period: { color: c.signal },
   subtitle: { color: c.quiet, fontSize: 14, lineHeight: 21, marginTop: 11 },
-  contextStrip: { flexDirection: 'row', alignItems: 'center', gap: 12, borderColor: c.line, borderWidth: 1, borderRadius: 16, backgroundColor: c.raised, padding: 15, marginBottom: 18 },
+  contextStrip: { flexDirection: 'row', alignItems: 'center', gap: 12, borderColor: '#9EBD75', borderWidth: 1, borderRadius: 14, backgroundColor: '#FBFFF0', padding: 15, marginBottom: 16 },
   contextDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: c.teal },
   contextText: { flex: 1 },
-  contextHeading: { color: c.lime, fontSize: 9, fontWeight: '900', letterSpacing: 1.2 },
+  contextHeading: { color: c.signal, fontSize: 9, fontWeight: '900', letterSpacing: 1.2 },
   contextDetail: { color: c.quiet, fontSize: 11, lineHeight: 17, marginTop: 5 },
   contextModel: { color: c.teal, fontSize: 9, fontWeight: '900', letterSpacing: 1 },
-  conversation: { minHeight: 280, borderWidth: 1, borderColor: c.line, borderRadius: 20, backgroundColor: c.raised, padding: 18, marginBottom: 16 },
+  conversation: { minHeight: 280, borderWidth: 1, borderColor: c.line, borderRadius: 18, backgroundColor: c.raised, padding: 17, marginBottom: 16 },
   emptyState: { paddingVertical: 11 },
-  emptyGlyph: { color: c.lime, fontSize: 34 },
+  emptyGlyph: { color: c.signal, fontSize: 34 },
   emptyTitle: { color: c.ink, fontSize: 23, fontWeight: '800', letterSpacing: -0.5, marginTop: 18 },
   emptyBody: { color: c.quiet, fontSize: 13, lineHeight: 20, marginTop: 8 },
   prompts: { gap: 8, marginTop: 24 },
-  prompt: { borderWidth: 1, borderColor: c.line, borderRadius: 10, paddingHorizontal: 13, paddingVertical: 13 },
+  prompt: { borderWidth: 1, borderColor: '#A6BAAA', borderRadius: 10, backgroundColor: '#F7FAF0', paddingHorizontal: 13, paddingVertical: 14 },
   promptText: { color: c.ink, fontSize: 12, fontWeight: '700' },
   threadHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 },
   threadLabel: { color: c.dim, fontSize: 10, fontWeight: '900', letterSpacing: 1.4 },
-  clearText: { color: c.lime, fontSize: 10, fontWeight: '900', letterSpacing: 0.9 },
+  clearText: { color: c.signal, fontSize: 10, fontWeight: '900', letterSpacing: 0.9 },
   message: { borderRadius: 15, padding: 15, marginBottom: 12, maxWidth: '94%' },
-  userMessage: { backgroundColor: c.raisedAlt, alignSelf: 'flex-end', borderColor: c.line, borderWidth: 1 },
-  pilotMessage: { backgroundColor: c.canvas, alignSelf: 'flex-start', borderColor: c.line, borderWidth: 1 },
+  userMessage: { backgroundColor: '#EAF1E6', alignSelf: 'flex-end', borderColor: '#B6C9B6', borderWidth: 1 },
+  pilotMessage: { backgroundColor: '#F4F7F3', alignSelf: 'flex-start', borderColor: c.line, borderWidth: 1 },
   speaker: { color: c.teal, fontSize: 9, fontWeight: '900', letterSpacing: 1.2, marginBottom: 9 },
-  userSpeaker: { color: c.lime },
+  userSpeaker: { color: c.signal },
   messageText: { color: c.ink, fontSize: 14, lineHeight: 21 },
   listenButton: { marginTop: 12, alignSelf: 'flex-start' },
-  listenText: { color: c.lime, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  listenText: { color: c.signal, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
   thinking: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6, padding: 10 },
   thinkingText: { color: c.teal, fontSize: 10, fontWeight: '800', letterSpacing: 0.7 },
-  composer: { borderWidth: 1, borderColor: c.line, borderRadius: 20, backgroundColor: c.raised, padding: 18 },
+  composer: { borderWidth: 1, borderColor: c.line, borderRadius: 18, backgroundColor: c.raised, padding: 18 },
   composerHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   composerLabel: { color: c.ink, fontSize: 10, fontWeight: '900', letterSpacing: 1.5 },
   readAloud: { color: c.teal, fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
-  input: { minHeight: 100, borderColor: c.line, borderWidth: 1, borderRadius: 12, backgroundColor: c.canvas, color: c.ink, fontSize: 14, lineHeight: 21, padding: 14, marginTop: 15 },
+  input: { minHeight: 100, borderColor: c.line, borderWidth: 1, borderRadius: 12, backgroundColor: '#F8F9F3', color: c.ink, fontSize: 14, lineHeight: 21, padding: 14, marginTop: 15 },
   actions: { flexDirection: 'row', gap: 9, marginTop: 11 },
-  micButton: { minWidth: 102, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderColor: c.lime, borderWidth: 1, borderRadius: 11 },
+  micButton: { minWidth: 102, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderColor: '#9AB28B', backgroundColor: '#F7FAF0', borderWidth: 1, borderRadius: 11 },
   micLive: { borderColor: c.coral },
-  micText: { color: c.lime, fontWeight: '900', fontSize: 11 },
+  micText: { color: c.signal, fontWeight: '900', fontSize: 11 },
   sendButton: { flex: 1, minHeight: 48, alignItems: 'center', justifyContent: 'center', backgroundColor: c.lime, borderRadius: 11 },
-  sendText: { color: c.canvas, fontWeight: '900', fontSize: 10, letterSpacing: 0.8 },
+  sendText: { color: c.ink, fontWeight: '900', fontSize: 10, letterSpacing: 0.8 },
   disabled: { opacity: 0.45 },
   dimmed: { opacity: 0.45 },
   voiceNote: { color: c.teal, fontSize: 11, lineHeight: 17, marginTop: 12 },

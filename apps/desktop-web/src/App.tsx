@@ -59,6 +59,7 @@ function App() {
   const [lanAddress, setLanAddress] = useState<string>("");
   const [openRouterKey, setOpenRouterKey] = useState("");
   const [openRouterModel, setOpenRouterModel] = useState("");
+  const [activeSection, setActiveSection] = useState("overview");
 
   const refresh = useCallback(async () => {
     try {
@@ -84,6 +85,22 @@ function App() {
     // user-supplied rather than showing loopback as a phone-reachable address.
     const saved = window.localStorage.getItem("pocketpilot.lanAddress");
     if (saved) setLanAddress(saved);
+  }, []);
+
+  useEffect(() => {
+    const sections = ["overview", "workspace", "connection", "session", "history"]
+      .map((id) => document.getElementById(id))
+      .filter((element): element is HTMLElement => element !== null);
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        if (visible[0]) setActiveSection(visible[0].target.id);
+      },
+      { rootMargin: "-100px 0px -55% 0px", threshold: [0, 0.1, 0.25, 0.5] },
+    );
+    sections.forEach((section) => observer.observe(section));
+    return () => observer.disconnect();
   }, []);
 
   async function selectWorkspace(event: React.FormEvent<HTMLFormElement>) {
@@ -211,21 +228,21 @@ function App() {
           <span className="brand-copy"><strong>POCKETPILOT</strong><small>LOCAL CONTROL</small></span>
         </div>
         <nav className="nav-list" aria-label="Sections">
-          <a href="#overview" className="nav-link active"><span>◈</span> Overview</a>
-          <a href="#workspace" className="nav-link"><span>⌘</span> Workspace</a>
-          <a href="#connection" className="nav-link"><span>◎</span> Connection</a>
-          <a href="#session" className="nav-link"><span>≡</span> Session</a>
-          <a href="#history" className="nav-link"><span>◷</span> History</a>
+          <a href="#overview" className={`nav-link ${activeSection === "overview" ? "active" : ""}`} aria-current={activeSection === "overview" ? "location" : undefined}><span>◈</span> Overview</a>
+          <a href="#session" className={`nav-link ${activeSection === "session" ? "active" : ""}`} aria-current={activeSection === "session" ? "location" : undefined}><span>≡</span> Session</a>
+          <a href="#workspace" className={`nav-link ${activeSection === "workspace" ? "active" : ""}`} aria-current={activeSection === "workspace" ? "location" : undefined}><span>⌘</span> Workspace</a>
+          <a href="#connection" className={`nav-link ${activeSection === "connection" ? "active" : ""}`} aria-current={activeSection === "connection" ? "location" : undefined}><span>◎</span> Connection</a>
+          <a href="#history" className={`nav-link ${activeSection === "history" ? "active" : ""}`} aria-current={activeSection === "history" ? "location" : undefined}><span>◷</span> History</a>
         </nav>
         <div className="sidebar-foot">
           <div className="privacy-dot" />
-          <div><strong>Private by design</strong><small>Local agent · Human-approved edits</small></div>
+          <div><strong>Controlled execution</strong><small>Every file change needs approval</small></div>
         </div>
       </aside>
 
       <main className="main">
         <header className="topbar">
-          <div className="topbar-label">CITY BATTLE / DESKTOP AGENT</div>
+          <div className="topbar-label">POCKETPILOT <span>/</span> DESKTOP CONTROL</div>
           <span className={`top-status ${connected ? "online" : "offline"}`}>
             <i aria-hidden="true" /> {connected ? "AGENT ONLINE" : "AGENT OFFLINE"}
           </span>
@@ -233,37 +250,51 @@ function App() {
 
         <div className="content">
           <section id="overview" className="hero">
-            <p className="eyebrow"><span className="accent-line" /> PHONE-FIRST DEVELOPER TOOL</p>
-            <h1>Find the fault.<br /><em>Own the fix.</em></h1>
-            <p className="hero-sub">The iQOO captures the problem. This laptop holds the code, runs the checks, and applies only the fix you approve. Choose local Ollama or OpenRouter for model inference.</p>
-            <div className="hero-rule" />
+            <div className="hero-main"><p className="eyebrow"><span className="accent-line" /> LIVE WORKSPACE / CITY BATTLE 2026</p>
+            <h1>Every fix, <em>under your control.</em></h1>
+            <p className="hero-sub">Capture on the phone. Inspect and test on this laptop. Review the exact change before anything is written.</p></div>
             <div className="hero-meta">
-              <span><b>01</b> CONNECT THE PHONE</span>
-              <span><b>02</b> SELECT A PROJECT</span>
-              <span><b>03</b> ASK PILOT, THEN DEBUG</span>
+              <span><b>01</b> CAPTURE</span>
+              <span><b>02</b> ANALYZE</span>
+              <span><b>03</b> APPROVE</span>
+              <span><b>04</b> VERIFY &amp; UNDO</span>
             </div>
-            <div className="hero-orbit" aria-hidden="true"><div className="hero-orbit-inner">P</div></div>
-          </section>
-
-          <section className="pilot-banner" aria-label="Pilot voice assistant">
-            <div className="pilot-banner-symbol" aria-hidden="true">✳</div>
-            <div><p className="eyebrow">NEW / PILOT CONVERSATION</p><h2>Ask why. Hear the answer.</h2><p>Speech is transcribed on the phone. Pilot receives a bounded summary of the active session. It can explain, but cannot edit or publish. {cloudProvider ? "OpenRouter processes this prompt outside your laptop; avoid sending secrets." : "Ollama processes the prompt locally on this laptop."}</p></div>
-            <span className="pilot-banner-status">{state.provider.ready ? `${cloudProvider ? "CLOUD" : "LOCAL"} · ${state.provider.model}` : "AI PROVIDER OFFLINE"}</span>
           </section>
 
           {error && <div className="alert error" role="alert"><span>!</span><p>{error}</p><button onClick={() => void refresh()}>RETRY</button></div>}
           {notice && <div className="alert notice" role="status"><span>✓</span><p>{notice}</p><button onClick={() => setNotice(null)} aria-label="Dismiss notice">×</button></div>}
 
           <section className="readiness" aria-label="Readiness">
-            <div className="readiness-intro"><p className="eyebrow">SYSTEM READINESS</p><h2>Everything in view.</h2><p>No hidden steps. You always know what is connected and what can change.</p></div>
+            <div className="readiness-intro"><p className="eyebrow">01 / SYSTEM STATUS</p><h2>{preflightReady ? "Ready for a live run." : "Finish setup to begin."}</h2><p>Agent, model, project, and phone must be ready before a debug session.</p></div>
             <div className="readiness-items">
-              <div><span className="readiness-icon">◎</span><small>LOCAL AGENT</small><strong>{connected ? "Ready" : "Offline"}</strong></div>
-              <div><span className="readiness-icon">◇</span><small>{cloudProvider ? "OPENROUTER CLOUD" : "OLLAMA LOCAL"}</small><strong>{state.provider.ready ? "Ready" : "Not ready"}</strong></div>
-              <div><span className="readiness-icon">⌁</span><small>WORKSPACE</small><strong>{state.workspace.ready ? "Selected" : "Not selected"}</strong></div>
-              <div><span className="readiness-icon">▣</span><small>PHONES PAIRED</small><strong>{state.pairing.connected_devices}</strong></div>
-              <div><span className="readiness-icon">✓</span><small>DEMO PREFLIGHT</small><strong>{preflightReady ? "Ready" : `${4 - preflightMissing.length}/4 ready`}</strong></div>
+              <div className={connected ? "ready" : "attention"}><span className="readiness-icon">◎</span><small>DESKTOP AGENT</small><strong>{connected ? "Online" : "Offline"}</strong></div>
+              <div className={state.provider.ready ? "ready" : "attention"}><span className="readiness-icon">◇</span><small>{cloudProvider ? "OPENROUTER" : "OLLAMA"}</small><strong>{state.provider.ready ? "Ready" : "Not ready"}</strong></div>
+              <div className={state.workspace.ready ? "ready" : "attention"}><span className="readiness-icon">⌁</span><small>WORKSPACE</small><strong>{state.workspace.ready ? "Selected" : "Not selected"}</strong></div>
+              <div className={state.pairing.connected_devices > 0 ? "ready" : "attention"}><span className="readiness-icon">▣</span><small>PHONES LINKED</small><strong>{state.pairing.connected_devices}</strong></div>
+              <div className={preflightReady ? "ready" : "attention"}><span className="readiness-icon">✓</span><small>LIVE DEMO</small><strong>{preflightReady ? "Ready" : `${4 - preflightMissing.length}/4 ready`}</strong></div>
               {!preflightReady && <p className="readiness-note">Before the demo, confirm: {preflightMissing.join(" · ")}. This check is local and does not change project files.</p>}
             </div>
+          </section>
+
+          <section id="session" className="panel session-panel">
+            <div className="panel-heading"><div><p className="eyebrow">02 / LIVE WORKFLOW</p><h2>Current debug session</h2></div><span className={`session-pill ${busy ? "busy" : ""}`}>{stateText(session?.stage)}</span></div>
+            {session ? (
+              <div className="session-content">
+                <div className="session-headline"><span className="session-monogram">{busy ? "◌" : session.stage === "verified" ? "✓" : "↗"}</span><div><small>SESSION {session.id.slice(0, 8)}</small><h3>{session.analysis?.title || stateText(session.stage)}</h3></div></div>
+                <div className="session-stats"><div><small>STAGE</small><strong>{stateText(session.stage)}</strong></div><div><small>REVISION</small><strong>{session.revision}</strong></div><div><small>LOCATION</small><strong className="mono">{session.analysis?.location ? `${session.analysis.location.path}:${session.analysis.location.line}` : "Awaiting evidence"}</strong></div></div>
+                {session.error_message && <p className="inline-error">{session.error_message}</p>}
+                {session.validation && <div className="validation-line"><span>{session.validation.passed ? "✓" : "!"}</span> {session.validation.passed ? "Approved change passed its checks" : "The checks did not pass"} · <code>{session.validation.command}</code></div>}
+                {session.github_publish && <div className="github-line" aria-live="polite"><strong>GITHUB / {session.github_publish.status.replaceAll("_", " ").toUpperCase()}</strong>{session.github_publish.repository && <span>{session.github_publish.repository} · {session.github_publish.branch} · {session.github_publish.path}</span>}{session.github_publish.message && <span>Commit message: {session.github_publish.message}</span>}{session.github_publish.commit_sha && <code>{session.github_publish.commit_sha.slice(0, 12)}</code>}{session.github_publish.detail && <small>{session.github_publish.detail}</small>}{session.github_publish.status === "awaiting_desktop_confirmation" && <><small>Review the destination above. The paired phone cannot create or push a commit without this laptop-side approval.</small><button className="publish-confirm" disabled={working} onClick={() => void confirmGitHubPublish(session)}>CONFIRM COMMIT &amp; PUSH</button></>}<small>GitHub credentials stay on this laptop. Configured Git hooks may run during commit.</small></div>}
+              </div>
+            ) : (
+              <div className="empty-session"><div className="empty-symbol">◌</div><div><h3>Waiting for a debug session</h3><p>Start on the iQOO. Analysis, approval, tests, and undo will appear here as they happen.</p></div></div>
+            )}
+          </section>
+
+          <section className="pilot-banner" aria-label="Pilot voice assistant">
+            <div className="pilot-banner-symbol" aria-hidden="true">✳</div>
+            <div><p className="eyebrow">PILOT / EXPLAIN THE WORK</p><h2>Ask what happened.</h2><p>Speak from the phone to understand the active session. Pilot can explain the result; file changes still require your approval. {cloudProvider ? "OpenRouter processes this prompt outside your laptop; avoid sending secrets." : "Ollama processes the prompt locally on this laptop."}</p></div>
+            <span className="pilot-banner-status">{state.provider.ready ? `${cloudProvider ? "CLOUD" : "LOCAL"} · ${state.provider.model}` : "AI PROVIDER OFFLINE"}</span>
           </section>
 
           <section className="panel provider-panel" aria-label="AI provider settings">
@@ -287,7 +318,7 @@ function App() {
 
           <div className="grid">
             <section id="workspace" className="panel workspace-panel">
-              <div className="panel-heading"><div><p className="eyebrow">01 / PROJECT BOUNDARY</p><h2>Select a workspace</h2></div><span className="panel-symbol">⌘</span></div>
+              <div className="panel-heading"><div><p className="eyebrow">03 / PROJECT BOUNDARY</p><h2>Select a workspace</h2></div><span className="panel-symbol">⌘</span></div>
               <p className="panel-copy">Choose the project you want PocketPilot to inspect. Files outside this folder stay out of reach.</p>
               <form onSubmit={(event) => void selectWorkspace(event)}>
                 <label htmlFor="workspace-path">FOLDER PATH</label>
@@ -297,7 +328,7 @@ function App() {
             </section>
 
             <section id="connection" className="panel connection-panel">
-              <div className="panel-heading"><div><p className="eyebrow">02 / SECURE PAIRING</p><h2>Connect the iQOO</h2></div><span className="panel-symbol">◎</span></div>
+              <div className="panel-heading"><div><p className="eyebrow">04 / SECURE PAIRING</p><h2>Connect the iQOO</h2></div><span className="panel-symbol">◎</span></div>
               <p className="panel-copy">Office Kit connects your device to this laptop. PocketPilot also needs its own short-lived pairing code for app actions.</p>
               <label htmlFor="lan-address">LAPTOP LAN ADDRESS FOR PHONE</label>
               <input id="lan-address" spellCheck={false} value={lanAddress} onChange={(event) => { setLanAddress(event.target.value); window.localStorage.setItem("pocketpilot.lanAddress", event.target.value); }} placeholder="e.g. 192.168.1.5:8000" />
@@ -309,23 +340,8 @@ function App() {
             </section>
           </div>
 
-          <section id="session" className="panel session-panel">
-            <div className="panel-heading"><div><p className="eyebrow">03 / LIVE WORKFLOW</p><h2>Current debug session</h2></div><span className={`session-pill ${busy ? "busy" : ""}`}>{stateText(session?.stage)}</span></div>
-            {session ? (
-              <div className="session-content">
-                <div className="session-headline"><span className="session-monogram">{busy ? "◌" : session.stage === "verified" ? "✓" : "↗"}</span><div><small>SESSION {session.id.slice(0, 8)}</small><h3>{session.analysis?.title || stateText(session.stage)}</h3></div></div>
-                <div className="session-stats"><div><small>STAGE</small><strong>{stateText(session.stage)}</strong></div><div><small>REVISION</small><strong>{session.revision}</strong></div><div><small>LOCATION</small><strong className="mono">{session.analysis?.location ? `${session.analysis.location.path}:${session.analysis.location.line}` : "Awaiting evidence"}</strong></div></div>
-                {session.error_message && <p className="inline-error">{session.error_message}</p>}
-                {session.validation && <div className="validation-line"><span>{session.validation.passed ? "✓" : "!"}</span> {session.validation.passed ? "Approved change passed its checks" : "The checks did not pass"} · <code>{session.validation.command}</code></div>}
-                {session.github_publish && <div className="github-line" aria-live="polite"><strong>GITHUB / {session.github_publish.status.replaceAll("_", " ").toUpperCase()}</strong>{session.github_publish.repository && <span>{session.github_publish.repository} · {session.github_publish.branch} · {session.github_publish.path}</span>}{session.github_publish.message && <span>Commit message: {session.github_publish.message}</span>}{session.github_publish.commit_sha && <code>{session.github_publish.commit_sha.slice(0, 12)}</code>}{session.github_publish.detail && <small>{session.github_publish.detail}</small>}{session.github_publish.status === "awaiting_desktop_confirmation" && <><small>Review the destination above. The paired phone cannot create or push a commit without this laptop-side approval.</small><button className="publish-confirm" disabled={working} onClick={() => void confirmGitHubPublish(session)}>CONFIRM COMMIT &amp; PUSH</button></>}<small>GitHub credentials stay on this laptop. Configured Git hooks may run during commit.</small></div>}
-              </div>
-            ) : (
-              <div className="empty-session"><div className="empty-symbol">◌</div><div><h3>Waiting for a debug session</h3><p>Start on the iQOO. Analysis, approval, tests, and undo will appear here as they happen.</p></div></div>
-            )}
-          </section>
-
           <section id="history" className="panel session-panel history-panel">
-            <div className="panel-heading"><div><p className="eyebrow">04 / PRIVATE ARCHIVE</p><h2>Recent sessions</h2></div><span className="panel-symbol">◷</span></div>
+            <div className="panel-heading"><div><p className="eyebrow">05 / PRIVATE ARCHIVE</p><h2>Recent sessions</h2></div><span className="panel-symbol">◷</span></div>
             <p className="panel-copy">Up to 25 completed outcomes saved on this laptop. Error logs, source code, diffs, and test output are excluded.</p>
             {history.length ? <div className="history-list">{history.map(item => (
               <article className="history-item" key={item.id}>
