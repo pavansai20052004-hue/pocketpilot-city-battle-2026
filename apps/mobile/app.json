@@ -13,7 +13,10 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#09131E"
-      }
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "name": "PocketPilot AI",
@@ -49,17 +52,31 @@
         {
           "microphonePermission": "PocketPilot uses the microphone for on-device error dictation and voice questions.",
           "speechRecognitionPermission": "PocketPilot transcribes error notes and voice questions on this device.",
-          "androidSpeechServicePackages": ["com.google.android.as"]
+          "androidSpeechServicePackages": [
+            "com.google.android.as"
+          ]
         }
       ],
-      ["rn-mlkit-ocr", { "ocrModels": ["latin"], "ocrUseBundled": true }]
+      [
+        "rn-mlkit-ocr",
+        {
+          "ocrModels": [
+            "latin"
+          ],
+          "ocrUseBundled": true
+        }
+      ]
     ],
     "extra": {
       "buildMode": "City Battle 2026",
+      "expo-navigation-bar": {
+        "enforceContrast": false,
+        "style": "dark"
+      },
       "eas": {
-        "projectId": "f4236ba8-30c4-4a23-a69c-b45b7b2dda3a"
+        "projectId": "bbd0fd53-f077-4820-9232-31b0ced552b8"
       }
     },
-    "owner": "zeroday-404"
+    "owner": "pavan00040s-team"
   }
 }
