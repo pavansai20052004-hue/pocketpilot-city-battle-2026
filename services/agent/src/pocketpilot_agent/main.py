@@ -33,7 +33,7 @@ from .models import (
 )
 from .provider import OllamaProvider, OpenRouterProvider, ProviderError
 from .recovery import RecoveryStore
-from .workspace import SourceMatch, Workspace, digest
+from .workspace import MAX_SOURCE_BYTES, SourceMatch, Workspace, digest
 
 DEVICE_TOKEN_TTL_SECONDS = 36 * 60 * 60
 
@@ -153,7 +153,7 @@ class AgentState:
         self.git_baseline = None
 
 
-app = FastAPI(title="PocketPilot City Battle Agent", version="0.1.0")
+app = FastAPI(title="PocketPilot City Battle Agent", version="1.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -468,10 +468,13 @@ async def analyze_in_background(
     if current is None or current.id != session_id:
         return
     try:
+        context_text, context_sources = (
+            workspace.analysis_context(match, current.error_text) if match else ("", [])
+        )
         result = await state.provider.analyze(
             error_text=current.error_text,
             path=match.path if match else None,
-            source=workspace.context(match) if match else "",
+            source=context_text,
         )
         location = workspace.location(match) if match else None
         analysis = Analysis(
@@ -483,6 +486,7 @@ async def analyze_in_background(
             repair_strategy=text_field(
                 result.get("repair_strategy"), "Review the error and source"
             ),
+            context_sources=context_sources,
         )
         async with state.lock:
             if (
@@ -541,9 +545,12 @@ async def propose_in_background(session_id: str, workspace: Workspace, match: So
     if current is None or current.id != session_id or current.analysis is None:
         return
     try:
+        target_context, target_source = workspace.target_chunk(match)
         result = await state.provider.propose(
             path=match.path,
-            source=match.text,
+            source=target_source,
+            source_start_line=target_context.start_line,
+            target_line=match.line,
             error_text=current.error_text,
             analysis=current.analysis.model_dump_json(),
         )
@@ -561,7 +568,7 @@ async def propose_in_background(session_id: str, workspace: Workspace, match: So
         if not (target_start_line - 5 <= match.line <= target_end_line + 5):
             raise ValueError("AI replacement is not near the reported error")
         new_source = match.text.replace(old_text, new_text, 1)
-        if len(new_source.encode("utf-8")) > 80_000:
+        if len(new_source.encode("utf-8")) > MAX_SOURCE_BYTES:
             raise ValueError("Patched file would exceed size limit")
         if match.path.endswith(".py"):
             compile(new_source, match.path, "exec")

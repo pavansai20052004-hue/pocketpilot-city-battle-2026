@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pocketpilot-citybattle-agent"
-version = "0.1.0"
+version = "1.1.0"
 description = "PocketPilot local desktop agent"
 requires-python = ">=3.11"
 dependencies = ["fastapi>=0.116,<1", "httpx>=0.28,<1", "uvicorn>=0.35,<1"]

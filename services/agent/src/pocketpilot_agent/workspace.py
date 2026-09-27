@@ -10,8 +10,9 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
-from .models import Location, Validation
+from .models import ContextSource, Location, Validation
 
 SOURCE_EXTENSIONS = {".py", ".java", ".ts", ".tsx", ".js", ".jsx", ".cs"}
 SKIP_PARTS = {
@@ -32,9 +33,15 @@ SKIP_PARTS = {
     ".idea",
     ".vscode",
 }
-MAX_SOURCE_BYTES = 80_000
+MAX_SOURCE_BYTES = 256_000
 MAX_FILES = 600
 MAX_DEPTH = 12
+CONTEXT_CHUNK_LINES = 72
+CONTEXT_CHUNK_OVERLAP = 12
+MAX_CONTEXT_CHUNKS = 4
+MAX_CONTEXT_CHARS = 18_000
+MAX_RELATED_FILES_SCANNED = 24
+MAX_RELATED_SCAN_BYTES = 2_000_000
 # OCR can insert spaces around an extension dot ("pricing. py:2") or read it
 # as a dash ("pricing-py:2"). An explicit line and unique indexed source are
 # still required before the location can be trusted.
@@ -63,6 +70,58 @@ TRACEBACK_FRAME = re.compile(
     re.IGNORECASE,
 )
 SENSITIVE_LINE = re.compile(r"(?i)(?:api[_-]?key|password|secret|access[_-]?token)\s*[:=]")
+IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+CAMEL_PART = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)|\d+")
+CONTEXT_STOPWORDS = {
+    "this",
+    "that",
+    "with",
+    "from",
+    "when",
+    "then",
+    "they",
+    "have",
+    "has",
+    "will",
+    "into",
+    "true",
+    "false",
+    "null",
+    "none",
+    "line",
+    "test",
+    "tests",
+    "error",
+    "exception",
+    "failure",
+    "failed",
+    "expected",
+    "actual",
+    "java",
+    "python",
+    "typescript",
+    "javascript",
+    "service",
+    "class",
+    "return",
+    "public",
+    "private",
+    "static",
+    "void",
+    "string",
+    "int",
+}
+
+
+def _identifier_terms(value: str) -> set[str]:
+    terms: set[str] = set()
+    for identifier in IDENTIFIER.findall(value):
+        parts = CAMEL_PART.findall(identifier)
+        for term in (*parts, identifier):
+            folded = term.casefold()
+            if len(folded) >= 4 and folded not in CONTEXT_STOPWORDS:
+                terms.add(folded)
+    return terms
 
 
 def _fixed_command_argv(command: str, *arguments: str) -> list[str]:
@@ -189,7 +248,7 @@ class Workspace:
             raise ValueError("Source file exceeds size limit")
         return path
 
-    def locate(self, error_text: str) -> SourceMatch | None:
+    def locate(self, error_text: str, *, include_tests: bool = False) -> SourceMatch | None:
         candidates: list[tuple[str, int]] = []
 
         def add_candidate(raw_path: str, line_text: str) -> None:
@@ -217,7 +276,7 @@ class Workspace:
                 for key in self.files
                 if key.rsplit("/", 1)[-1].casefold() == basename.casefold()
             ]
-            if len(hits) == 1 and not is_test_source(hits[0]):
+            if len(hits) == 1 and is_test_source(hits[0]) == include_tests:
                 candidates.append((hits[0], line))
 
         for match in STACK_PATH.finditer(error_text):
@@ -258,6 +317,166 @@ class Workspace:
                 line = "[sensitive line omitted]"
             numbered.append(f"{number:4}: {line}")
         return "\n".join(numbered)[:18_000]
+
+    def _bounded_chunk(
+        self,
+        match: SourceMatch,
+        *,
+        role: Literal["target", "test", "related"],
+        max_lines: int,
+        max_chars: int,
+    ) -> tuple[ContextSource, str]:
+        lines = match.text.splitlines()
+        anchor = match.line - 1
+        if len(lines) <= max_lines:
+            start, end = 0, len(lines)
+        else:
+            start = max(0, min(anchor - max_lines // 2, len(lines) - max_lines))
+            end = min(len(lines), start + max_lines)
+
+        def render(first: int, last: int) -> str:
+            selected = [
+                "[sensitive line omitted]" if SENSITIVE_LINE.search(line) else line
+                for line in lines[first:last]
+            ]
+            return "\n".join(selected)
+
+        text = render(start, end)
+        while len(text) > max_chars and start < anchor and end > anchor + 1:
+            if anchor - start >= end - 1 - anchor:
+                start += 1
+            else:
+                end -= 1
+            text = render(start, end)
+        if len(text) > max_chars:
+            text = text[:max_chars]
+        return (
+            ContextSource(
+                role=role,
+                path=match.path,
+                start_line=start + 1,
+                end_line=max(start + 1, end),
+            ),
+            text,
+        )
+
+    def target_chunk(self, match: SourceMatch) -> tuple[ContextSource, str]:
+        """Return bounded edit context and its absolute line range."""
+        return self._bounded_chunk(match, role="target", max_lines=120, max_chars=16_000)
+
+    def analysis_context(
+        self, match: SourceMatch, error_text: str
+    ) -> tuple[str, list[ContextSource]]:
+        """Build a local, deterministic evidence pack; only the target can be patched."""
+        selected: list[tuple[ContextSource, str]] = []
+
+        def render_block(source: ContextSource, text: str) -> str:
+            return (
+                f"[{source.role.upper()} CHUNK "
+                f"{source.path}:{source.start_line}-{source.end_line}]\n{text}"
+            )
+
+        def selected_size() -> int:
+            return (
+                sum(len(render_block(source, text)) for source, text in selected)
+                + max(0, len(selected) - 1) * 2
+            )
+
+        target_ref, target_text = self._bounded_chunk(
+            match, role="target", max_lines=72, max_chars=8_000
+        )
+        selected.append((target_ref, target_text))
+        used_paths = {match.path}
+
+        test_match = self.locate(error_text, include_tests=True)
+        if test_match and test_match.path not in used_paths and len(selected) < MAX_CONTEXT_CHUNKS:
+            test_ref, test_text = self._bounded_chunk(
+                test_match, role="test", max_lines=48, max_chars=4_000
+            )
+            selected.append((test_ref, test_text))
+            if selected_size() <= MAX_CONTEXT_CHARS:
+                used_paths.add(test_match.path)
+            else:
+                selected.pop()
+
+        query_terms = _identifier_terms(error_text[:8_000] + "\n" + target_text)
+        target_parts = match.path.split("/")
+        candidates: list[tuple[int, str, ContextSource, str]] = []
+        related_files_scanned = 0
+        related_bytes_scanned = 0
+        for path in sorted(self.files):
+            if path in used_paths or is_test_source(path):
+                continue
+            path_terms = _identifier_terms(Path(path).stem)
+            path_overlap = query_terms & path_terms
+            if not path_overlap:
+                continue
+            path_parts = path.split("/")
+            common_depth = 0
+            for left, right in zip(target_parts[:-1], path_parts[:-1]):
+                if left.casefold() != right.casefold():
+                    break
+                common_depth += 1
+            if common_depth < 2 and len(path_overlap) < 2:
+                continue
+            if related_files_scanned >= MAX_RELATED_FILES_SCANNED:
+                break
+
+            try:
+                candidate_path = self.safe_file(path)
+                candidate_size = candidate_path.stat().st_size
+                if related_bytes_scanned + candidate_size > MAX_RELATED_SCAN_BYTES:
+                    continue
+                candidate_text = candidate_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError, ValueError):
+                continue
+            related_files_scanned += 1
+            related_bytes_scanned += candidate_size
+            candidate_lines = candidate_text.splitlines()
+            step = max(1, CONTEXT_CHUNK_LINES - CONTEXT_CHUNK_OVERLAP)
+            best: tuple[int, int, int] | None = None
+            for start in range(0, len(candidate_lines), step):
+                end = min(len(candidate_lines), start + CONTEXT_CHUNK_LINES)
+                chunk = "\n".join(candidate_lines[start:end])
+                overlap = query_terms & _identifier_terms(chunk)
+                score = len(overlap) + 2 * len(path_overlap)
+                if len(overlap) < 2 or score < 4:
+                    continue
+                if best is None or score > best[0]:
+                    best = (score, start, end)
+                if end == len(candidate_lines):
+                    break
+            if best is None:
+                continue
+            score, start, end = best
+            candidate_match = SourceMatch(
+                path=path,
+                line=(start + end) // 2 + 1,
+                text=candidate_text,
+                sha256=digest(candidate_text.encode("utf-8")),
+            )
+            ref, bounded_text = self._bounded_chunk(
+                candidate_match,
+                role="related",
+                max_lines=CONTEXT_CHUNK_LINES,
+                max_chars=3_000,
+            )
+            candidates.append((score, path, ref, bounded_text))
+
+        candidates.sort(key=lambda item: (-item[0], item[1], item[2].start_line))
+        for _, path, ref, text in candidates:
+            if len(selected) >= MAX_CONTEXT_CHUNKS:
+                break
+            selected.append((ref, text))
+            if selected_size() > MAX_CONTEXT_CHARS:
+                selected.pop()
+                continue
+            used_paths.add(path)
+
+        blocks = [render_block(source, text) for source, text in selected]
+        context = "\n\n".join(blocks)
+        assert len(context) <= MAX_CONTEXT_CHARS
+        return context, [source for source, _ in selected]
 
     def test_command(self, source_path: str | None = None) -> tuple[list[str], str, Path] | None:
         # Select the nearest project manifest above the approved source file.

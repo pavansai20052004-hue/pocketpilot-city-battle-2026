@@ -17,8 +17,12 @@ class MockResponse:
     def raise_for_status(self):
         if self.status_code >= 400:
             request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
-            response = httpx.Response(self.status_code, request=request, text="private-provider-error")
-            raise httpx.HTTPStatusError("private-provider-error", request=request, response=response)
+            response = httpx.Response(
+                self.status_code, request=request, text="private-provider-error"
+            )
+            raise httpx.HTTPStatusError(
+                "private-provider-error", request=request, response=response
+            )
 
     def json(self):
         return self.payload
@@ -97,6 +101,8 @@ def test_openrouter_proposal_redacts_full_matched_source(monkeypatch):
         client.propose(
             path="src/pricing.py",
             source="def price():\n    api_key = 'source-secret'\n    return total * rate",
+            source_start_line=1,
+            target_line=3,
             error_text="TypeError password=error-secret",
             analysis='{"problem":"token=analysis-secret"}',
         )
@@ -104,6 +110,8 @@ def test_openrouter_proposal_redacts_full_matched_source(monkeypatch):
 
     assert result["old_text"] == "return total * rate"
     sent = json.dumps(observed["payload"])
+    assert "TARGET ERROR LINE: 3" in sent
+    assert "SOURCE WINDOW ABSOLUTE RANGE: 1-3" in sent
     for secret in ("source-secret", "error-secret", "analysis-secret", "secret-test-key"):
         assert secret not in sent
     assert observed["payload"]["max_tokens"] == 1700

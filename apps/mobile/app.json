@@ -3,13 +3,13 @@
     "name": "PocketPilot AI",
     "slug": "pocketpilot-citybattle",
     "scheme": "pocketpilot",
-    "version": "1.0.9",
+    "version": "1.1.0",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "android": {
       "package": "ai.pocketpilot.citybattle",
-      "versionCode": 10,
+      "versionCode": 11,
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#09131E"

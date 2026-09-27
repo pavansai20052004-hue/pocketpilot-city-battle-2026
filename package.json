@@ -1,6 +1,6 @@
 {
   "name": "pocketpilot-city-battle",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "private": true,
   "workspaces": [
     "apps/*",

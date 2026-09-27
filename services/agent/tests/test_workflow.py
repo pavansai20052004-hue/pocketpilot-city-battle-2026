@@ -97,6 +97,9 @@ def test_approval_verification_recovery_undo(tmp_path, client, monkeypatch):
     analyzed = asyncio.run(wait_stage(client, token, "root_cause_found"))
     assert analyzed["analysis"]["confidence"] == "high"
     assert analyzed["analysis"]["location"] == {"path": "user_service.py", "line": 2}
+    assert analyzed["analysis"]["context_sources"] == [
+        {"role": "target", "path": "user_service.py", "start_line": 1, "end_line": 2}
+    ]
 
     generating = client.post(f"/api/sessions/{session_id}/proposal", headers=headers)
     assert generating.status_code == 202
@@ -454,6 +457,83 @@ def test_stack_trace_targets_source_not_test(tmp_path):
     assert match.path == "user_service.py"
     assert match.line == 2
     assert workspace.locate("test_user_service.py:4: TypeError") is None
+
+
+def test_context_chunker_is_bounded_redacted_and_reports_absolute_ranges(tmp_path):
+    source_dir = tmp_path / "src" / "main" / "java" / "demo"
+    test_dir = tmp_path / "src" / "test" / "java" / "demo"
+    source_dir.mkdir(parents=True)
+    test_dir.mkdir(parents=True)
+
+    target_lines = ["package demo;"] + ["// unrelated filler"] * 220
+    target_lines[149] = "    return price - (price * discountPercent / 100);"
+    target_lines[155] = '    String api_key = "fixture-marker-not-secret";'
+    (source_dir / "PriceService.java").write_text("\n".join(target_lines), encoding="utf-8")
+
+    related_lines = ["package demo;"] + ["// unrelated filler"] * 150
+    related_lines[124] = (
+        "    BigDecimal discountedPrice(BigDecimal price, Integer discountPercent) {"
+    )
+    related_lines[125] = '        String api_key = "related-fixture-marker";'
+    (source_dir / "PriceDiscountPolicy.java").write_text("\n".join(related_lines), encoding="utf-8")
+    test_lines = ["package demo;"] + ["// test context"] * 25
+    test_lines[15] = "    assertEquals(price, service.finalPrice(price, null));"
+    (test_dir / "PriceServiceTest.java").write_text("\n".join(test_lines), encoding="utf-8")
+
+    workspace = Workspace(str(tmp_path))
+    error = (
+        "PriceServiceTest.java:16: expected unchanged price\n"
+        "PriceService.java:150: NullPointerException in finalPrice discountPercent"
+    )
+    target = workspace.locate(error)
+    assert target is not None
+    assert (target.path, target.line) == ("src/main/java/demo/PriceService.java", 150)
+
+    context, sources = workspace.analysis_context(target, error)
+
+    assert len(sources) <= 4
+    assert len(context) <= 18_000
+    assert [(item.role, item.path) for item in sources] == [
+        ("target", "src/main/java/demo/PriceService.java"),
+        ("test", "src/test/java/demo/PriceServiceTest.java"),
+        ("related", "src/main/java/demo/PriceDiscountPolicy.java"),
+    ]
+    target_source, test_source, related_source = sources
+    assert target_source.start_line <= 150 <= target_source.end_line
+    assert test_source.start_line <= 16 <= test_source.end_line
+    assert related_source.start_line <= 125 <= related_source.end_line
+    assert "fixture-marker-not-secret" not in context
+    assert "related-fixture-marker" not in context
+    assert "[sensitive line omitted]" in context
+    assert workspace.locate(error, include_tests=True).path == test_source.path
+    assert workspace.locate("PriceServiceTest.java:16") is None
+
+
+def test_context_chunker_indexes_large_file_but_sends_only_bounded_window(tmp_path):
+    lines = ["# filler line for a realistic large source module 1234567890"] * 4_000
+    lines[3_499] = "def final_price(price, discount_percent):"
+    lines[3_500] = "    return price - (price * discount_percent // 100)"
+    source = "\n".join(lines)
+    assert len(source.encode("utf-8")) > 80_000
+    (tmp_path / "large_service.py").write_text(source, encoding="utf-8")
+
+    workspace = Workspace(str(tmp_path))
+    match = workspace.locate("large_service.py:3501: TypeError")
+    assert match is not None
+    assert (match.path, match.line) == ("large_service.py", 3501)
+
+    context, sources = workspace.analysis_context(match, "large_service.py:3501: TypeError")
+    target_ref, target_text = workspace.target_chunk(match)
+
+    assert len(match.text.encode("utf-8")) > 80_000
+    assert len(context) <= 18_000
+    assert len(target_text) <= 16_000
+    assert len(sources) == 1
+    assert sources[0].path == target_ref.path == "large_service.py"
+    assert sources[0].role == target_ref.role == "target"
+    assert sources[0].start_line <= 3501 <= sources[0].end_line
+    assert target_ref.start_line <= 3501 <= target_ref.end_line
+    assert "discount_percent" in target_text
 
 
 def test_ocr_spacing_recovers_explicit_known_source_frame(tmp_path):

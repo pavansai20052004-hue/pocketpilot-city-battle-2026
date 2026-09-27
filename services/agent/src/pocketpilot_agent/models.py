@@ -23,6 +23,13 @@ class Location(BaseModel):
     line: int = Field(ge=1)
 
 
+class ContextSource(BaseModel):
+    role: Literal["target", "test", "related"]
+    path: str
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+
+
 class Analysis(BaseModel):
     title: str
     confidence: Literal["high", "medium", "low"]
@@ -30,6 +37,7 @@ class Analysis(BaseModel):
     problem: str
     evidence: str
     repair_strategy: str
+    context_sources: list[ContextSource] = Field(default_factory=list)
 
 
 class ProposedFile(BaseModel):

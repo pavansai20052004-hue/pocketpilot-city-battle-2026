@@ -14,6 +14,13 @@ export interface SourceLocation {
   line: number;
 }
 
+export interface ContextSource {
+  role: "target" | "test" | "related";
+  path: string;
+  start_line: number;
+  end_line: number;
+}
+
 export interface Analysis {
   title: string;
   confidence: "high" | "medium" | "low";
@@ -21,6 +28,7 @@ export interface Analysis {
   problem: string;
   evidence: string;
   repair_strategy: string;
+  context_sources?: ContextSource[];
 }
 
 export interface ProposedFile {

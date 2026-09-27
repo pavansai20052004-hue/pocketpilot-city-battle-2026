@@ -5,6 +5,7 @@ export type Analysis = {
   problem: string;
   evidence: string;
   repair_strategy: string;
+  context_sources?: { role: 'target' | 'test' | 'related'; path: string; start_line: number; end_line: number }[];
 };
 
 export type Proposal = {

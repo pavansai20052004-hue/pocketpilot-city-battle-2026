@@ -129,7 +129,7 @@ function Panel({ children, accent = false }: { children: React.ReactNode; accent
   return <View style={[styles.panel, accent && styles.panelAccent]}>{children}</View>;
 }
 
-function ProcessingPanel({ stage }: { stage: Session['stage'] }) {
+function ProcessingPanel({ stage, provider }: { stage: Session['stage']; provider: 'ollama' | 'openrouter' | null }) {
   const spin = useRef(new Animated.Value(0)).current;
   const [startedAt] = useState(Date.now());
   const [elapsed, setElapsed] = useState(0);
@@ -141,8 +141,9 @@ function ProcessingPanel({ stage }: { stage: Session['stage'] }) {
     return () => { loop.stop(); clearInterval(timer); };
   }, [spin, startedAt]);
   const title = stage === 'analyzing' ? 'Finding the signal' : stage === 'generating_fix' ? 'Designing a safe fix' : 'Checking the result';
+  const providerLabel = provider === 'openrouter' ? 'OpenRouter cloud AI' : provider === 'ollama' ? 'local Ollama AI' : 'the configured AI provider';
   const body = stage === 'analyzing'
-    ? 'Your laptop is examining the error and nearby source with local AI.'
+    ? `Your laptop is examining the error and selected source context with ${providerLabel}.`
     : stage === 'generating_fix'
       ? 'A proposed change is being prepared. No file is changing yet.'
       : 'The approved patch is being checked against the selected project.';
@@ -154,7 +155,7 @@ function ProcessingPanel({ stage }: { stage: Session['stage'] }) {
   const rotation = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
   return (
     <Panel accent>
-      <Eyebrow index="↳">LOCAL AI / LIVE PROCESS</Eyebrow>
+      <Eyebrow index="↳">{provider === 'openrouter' ? 'CLOUD AI / LIVE PROCESS' : provider === 'ollama' ? 'LOCAL AI / LIVE PROCESS' : 'AI / LIVE PROCESS'}</Eyebrow>
       <View style={styles.processingMain}>
         <View style={styles.orbitBox}>
           <View style={styles.orbitInner}><Text style={styles.orbitCenter}>✦</Text></View>
@@ -202,13 +203,21 @@ function AnalysisPanel({ session }: { session: Session }) {
   const confidenceColor = a.confidence === 'high' ? c.signal : a.confidence === 'medium' ? c.amber : c.coral;
   return (
     <Panel accent>
-      <View style={styles.splitRow}><Eyebrow index="02">ROOT CAUSE</Eyebrow><View style={[styles.tag, { borderColor: confidenceColor }]}><Text style={[styles.tagText, { color: confidenceColor }]}>{a.confidence.toUpperCase()} CONFIDENCE</Text></View></View>
+      <View style={styles.splitRow}><Eyebrow index="02">ROOT CAUSE</Eyebrow><View style={[styles.tag, { borderColor: confidenceColor }]}><Text style={[styles.tagText, { color: confidenceColor }]}>SOURCE MATCH · {a.confidence.toUpperCase()}</Text></View></View>
       <Text style={styles.analysisTitle}>{a.title}</Text>
       <Text style={styles.pathText}>{a.location ? `${a.location.path}:${a.location.line}` : 'Location not established'}</Text>
       <Detail label="PROBLEM">{a.problem}</Detail>
       <Detail label="EVIDENCE">{a.evidence}</Detail>
       <Detail label="REPAIR STRATEGY">{a.repair_strategy}</Detail>
-      {a.confidence === 'low' && <Text style={styles.cautionText}>Low confidence: inspect the evidence before generating a fix.</Text>}
+      {!!a.context_sources?.length && <View style={styles.contextPack}>
+        <View style={styles.contextPackHeading}><Label>MODEL CONTEXT</Label><Text style={styles.contextPackCount}>{a.context_sources.length} BOUNDED CHUNK{a.context_sources.length === 1 ? '' : 'S'}</Text></View>
+        <Text style={styles.contextPackNote}>Bounded project excerpts selected on the laptop. Only the target file can be proposed for change.</Text>
+        {a.context_sources.map((source, index) => <View key={`${source.role}-${source.path}-${source.start_line}-${index}`} style={styles.contextSourceRow}>
+          <Text style={styles.contextSourceRole}>{source.role.toUpperCase()}</Text>
+          <Text style={styles.contextSourcePath}>{source.path}:{source.start_line}–{source.end_line}</Text>
+        </View>)}
+      </View>}
+      {a.confidence === 'low' && <Text style={styles.cautionText}>No unique supported source location was matched. Review the error text and evidence; a patch cannot be generated without a safe target.</Text>}
     </Panel>
   );
 }
@@ -835,7 +844,7 @@ export default function App() {
             <Button onPress={startAnalysis} disabled={busy || voiceListening || !state?.workspace?.ready} icon="⌁">{busy ? 'READING / SENDING…' : voiceListening ? 'STOP DICTATION TO CONTINUE' : 'ANALYZE ERROR'}</Button>
             {!state?.workspace?.ready && <Text style={styles.cautionText}>Choose a workspace in the desktop dashboard first.</Text>}
           </Panel> : session ? <>
-            {workingStages.has(session.stage) && <ProcessingPanel key={session.stage} stage={session.stage} />}
+            {workingStages.has(session.stage) && <ProcessingPanel key={session.stage} stage={session.stage} provider={state?.provider?.name ?? null} />}
             <AnalysisPanel session={session} />
             {session.stage === 'root_cause_found' && <Panel><Eyebrow index="03">NEXT DECISION</Eyebrow><Text style={styles.proposalTitle}>Ready to design a fix?</Text><Text style={styles.body}>The laptop will propose a bounded diff. You can review it before any file changes.</Text><View style={styles.sectionTop}><Button onPress={() => { void action(`/api/sessions/${session.id}/proposal`, {}); }} disabled={busy || !session.analysis?.location} icon="↗">GENERATE FIX</Button></View>{!session.analysis?.location && <Text style={styles.cautionText}>A safe repository location was not established, so a patch cannot be generated.</Text>}</Panel>}
             {session.stage === 'awaiting_approval' && <ProposalPanel session={session} busy={busy} onApprove={() => { if (session.proposal) void action(`/api/sessions/${session.id}/approve`, { proposal_id: session.proposal.id, revision: session.revision }, 300000); }} onReject={() => setComposeNew(true)} />}
@@ -959,6 +968,13 @@ const styles = StyleSheet.create({
   pathText: { color: c.signal, fontFamily: 'monospace', fontSize: 15, marginTop: 12, lineHeight: 22 },
   detail: { paddingTop: 17, borderTopWidth: 1, borderColor: c.line, marginTop: 19 },
   detailBody: { color: c.quiet, fontSize: 13, lineHeight: 21, marginTop: 10 },
+  contextPack: { marginTop: 19, padding: 14, borderWidth: 1, borderColor: c.line, borderRadius: 12, backgroundColor: '#F5F7EF' },
+  contextPackHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  contextPackCount: { color: c.signal, fontSize: 9, fontWeight: '900', letterSpacing: 0.6 },
+  contextPackNote: { color: c.quiet, fontSize: 11, lineHeight: 17, marginTop: 8, marginBottom: 5 },
+  contextSourceRow: { paddingTop: 9, marginTop: 8, borderTopWidth: 1, borderColor: c.line },
+  contextSourceRole: { color: c.signal, fontSize: 9, fontWeight: '900', letterSpacing: 0.8, marginBottom: 4 },
+  contextSourcePath: { color: c.ink, fontFamily: 'monospace', fontSize: 10, lineHeight: 16 },
   cautionText: { color: c.amber, fontSize: 12, lineHeight: 19, marginTop: 14 },
   proposalTitle: { color: c.ink, fontSize: 24, lineHeight: 30, fontWeight: '800', letterSpacing: -0.7, marginTop: 19, marginBottom: 12 },
   fileWrap: { marginTop: 16 },
