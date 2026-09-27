@@ -20,6 +20,13 @@
       "bundler": "metro"
     },
     "plugins": [
+      [
+        "expo-navigation-bar",
+        {
+          "enforceContrast": false,
+          "style": "dark"
+        }
+      ],
       "expo-secure-store",
       [
         "expo-build-properties",

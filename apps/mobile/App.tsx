@@ -2,6 +2,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as Speech from 'expo-speech';
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import { StatusBar } from 'expo-status-bar';
+import { NavigationBar } from 'expo-navigation-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -745,6 +746,7 @@ export default function App() {
 
   return <View style={styles.screen}>
     <StatusBar style="dark" />
+    <NavigationBar style="dark" />
     <BrandHeader connected={Boolean(token && connected)} paired={Boolean(token)} onDisconnect={() => { void disconnect(); }} />
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView style={styles.flex} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -974,7 +976,7 @@ const styles = StyleSheet.create({
   ghostAction: { alignItems: 'center', justifyContent: 'center', minHeight: 52, borderWidth: 1, borderColor: c.line, borderRadius: 12 },
   ghostActionText: { color: c.quiet, fontSize: 10, fontWeight: '800', letterSpacing: 1.1 },
   bottomSpace: { height: 35 },
-  tabBar: { backgroundColor: '#102B31', borderTopWidth: 1, borderColor: '#355157', flexDirection: 'row', paddingBottom: Platform.OS === 'ios' ? 24 : 10 },
+  tabBar: { backgroundColor: '#102B31', borderTopWidth: 1, borderColor: '#355157', flexDirection: 'row', paddingBottom: Platform.OS === 'android' ? 56 : Platform.OS === 'ios' ? 24 : 10 },
   tab: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 63 },
   tabIcon: { color: '#A6B8B5', fontSize: 22, marginBottom: 3 },
   tabLabel: { color: '#A6B8B5', fontWeight: '800', fontSize: 9, letterSpacing: 1.1 },
